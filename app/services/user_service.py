@@ -49,32 +49,28 @@ class UserService:
         return email.strip().lower()
 
     def to_public(self, row: User) -> UserPublic:
-        branch_id: str | None = None
+        branch_office_id: int | None = None
         if row.rol_id == WASHER_ROL_ID and row.id:
             office_id = self._branch_washer.get_branch_office_id_for_washer(row.id)
             if office_id is not None:
-                branch_id = str(office_id)
+                branch_office_id = office_id
         return UserPublic(
             id=str(row.id),
             fullName=row.full_name,
             email=row.email,
             role=role_from_id(row.rol_id),
-            branchId=branch_id,
+            branchOfficeId=branch_office_id,
             statusId=str(row.status_id) if row.status_id is not None else None,
             active=active_from_status_id(row.status_id),
         )
 
     @staticmethod
-    def _parse_branch_id(branch_id_raw: str | None) -> int | None:
-        if branch_id_raw is None or not str(branch_id_raw).strip():
+    def _parse_branch_office_id(branch_office_id_raw: int | None) -> int | None:
+        if branch_office_id_raw is None:
             return None
-        try:
-            branch_id = int(str(branch_id_raw).strip())
-        except ValueError as exc:
-            raise UserValidationError("La sucursal no es válida") from exc
-        if branch_id < 1:
+        if branch_office_id_raw < 1:
             raise UserValidationError("La sucursal no es válida")
-        return branch_id
+        return branch_office_id_raw
 
     def _resolve_status_id(
         self,
@@ -223,7 +219,7 @@ class UserService:
                 raise UserValidationError("No se pudo crear el usuario")
 
             if rol_id == WASHER_ROL_ID:
-                branch_office_id = self._parse_branch_id(data.branchId)
+                branch_office_id = self._parse_branch_office_id(data.branchOfficeId)
                 if branch_office_id is None:
                     raise UserValidationError("Seleccione una sucursal para el lavador")
                 self._branch_washer.assign_washer_to_branch(
@@ -279,8 +275,8 @@ class UserService:
             )
 
         try:
-            if new_rol_id == WASHER_ROL_ID and data.branchId is not None:
-                branch_office_id = self._parse_branch_id(data.branchId)
+            if new_rol_id == WASHER_ROL_ID and data.branchOfficeId is not None:
+                branch_office_id = self._parse_branch_office_id(data.branchOfficeId)
                 if branch_office_id is not None:
                     self._branch_washer.assign_washer_to_branch(
                         user_id,

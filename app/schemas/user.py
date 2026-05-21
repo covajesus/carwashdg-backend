@@ -11,7 +11,7 @@ class UserCreate(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=6, max_length=255)
     role: UserRole = "washer"
-    branchId: str | None = None
+    branchOfficeId: int | None = Field(default=None, ge=1)
     active: bool = True
     statusId: str | None = None
 
@@ -21,7 +21,7 @@ class UserUpdate(BaseModel):
     email: EmailStr | None = None
     password: str | None = Field(default=None, min_length=6, max_length=255)
     role: UserRole | None = None
-    branchId: str | None = None
+    branchOfficeId: int | None = Field(default=None, ge=1)
     active: bool | None = None
     statusId: str | None = None
 
@@ -31,7 +31,7 @@ class UserPublic(BaseModel):
     fullName: str
     email: str
     role: UserRole
-    branchId: str | None = None
+    branchOfficeId: int | None = Field(default=None, ge=1)
     statusId: str | None = None
     active: bool
 

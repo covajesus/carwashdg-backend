@@ -67,6 +67,13 @@ class TicketListResponse(BaseModel):
     items: list[TicketListItem]
 
 
+class TicketSummaryResponse(BaseModel):
+    """Suma de `total` por ticket (misma lógica que el listado admin)."""
+
+    totalEarnings: int = Field(ge=0)
+    ticketCount: int = Field(ge=0)
+
+
 class TicketDetailResponse(BaseModel):
     ticket: TicketListItem
     customer_name: str

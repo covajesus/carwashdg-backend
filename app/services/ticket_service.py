@@ -14,6 +14,7 @@ from app.schemas.ticket import (
     TicketDetailResponse,
     TicketListItem,
     TicketPublic,
+    TicketSummaryResponse,
     TicketUpdate,
 )
 from app.services.ticket_line_service import TicketLineService, TicketLineValidationError
@@ -123,6 +124,13 @@ class TicketService:
     def list_for_admin(self) -> list[TicketListItem]:
         stmt = self._active_filter(select(Ticket)).order_by(Ticket.added_date.desc())
         return [self._to_list_item(row) for row in self.db.scalars(stmt).all()]
+
+    def summary_for_admin(self) -> TicketSummaryResponse:
+        items = self.list_for_admin()
+        return TicketSummaryResponse(
+            totalEarnings=sum(item.total for item in items),
+            ticketCount=len(items),
+        )
 
     def get_detail(self, ticket_id: int) -> TicketDetailResponse:
         row = self.db.get(Ticket, ticket_id)

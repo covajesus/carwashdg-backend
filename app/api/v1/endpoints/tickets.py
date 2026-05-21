@@ -8,6 +8,7 @@ from app.schemas.ticket import (
     TicketDetailResponse,
     TicketItemResponse,
     TicketListResponse,
+    TicketSummaryResponse,
     TicketUpdate,
 )
 from app.services.ticket_service import TicketNotFoundError, TicketValidationError
@@ -18,6 +19,11 @@ router = APIRouter(prefix="/tickets", tags=["tickets"])
 @router.get("", response_model=TicketListResponse)
 def list_tickets(service: TicketServiceDep) -> TicketListResponse:
     return TicketListResponse(items=service.list_for_admin())
+
+
+@router.get("/summary", response_model=TicketSummaryResponse)
+def tickets_summary(service: TicketServiceDep) -> TicketSummaryResponse:
+    return service.summary_for_admin()
 
 
 @router.post("", response_model=TicketItemResponse, status_code=status.HTTP_201_CREATED)
