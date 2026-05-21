@@ -1,0 +1,102 @@
+from datetime import datetime
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.models.branch_office import BranchOffice
+from app.models.branch_office_washer import BranchOfficeWasher
+
+
+class BranchOfficeWasherValidationError(Exception):
+    pass
+
+
+class BranchOfficeWasherService:
+    def __init__(self, db: Session) -> None:
+        self.db = db
+
+    @staticmethod
+    def _now() -> datetime:
+        return datetime.now()
+
+    def _active_filter(self, stmt):
+        return stmt.where(BranchOfficeWasher.deleted_date.is_(None))
+
+    def list_washer_ids_for_branch(self, branch_office_id: int) -> list[int]:
+        if branch_office_id <= 0:
+            return []
+        rows = self.db.scalars(
+            self._active_filter(select(BranchOfficeWasher)).where(
+                BranchOfficeWasher.branch_office_id == branch_office_id,
+            ),
+        ).all()
+        ids: list[int] = []
+        for row in rows:
+            if row.washer_id is not None and row.washer_id > 0:
+                ids.append(row.washer_id)
+        return ids
+
+    def get_branch_office_id_for_washer(self, washer_id: int) -> int | None:
+        if washer_id <= 0:
+            return None
+        row = self.db.scalars(
+            self._active_filter(select(BranchOfficeWasher))
+            .where(BranchOfficeWasher.washer_id == washer_id)
+            .limit(1),
+        ).first()
+        if row is None or row.branch_office_id is None:
+            return None
+        return row.branch_office_id
+
+    def assign_washer_to_branch(
+        self,
+        washer_id: int,
+        branch_office_id: int,
+        *,
+        commit: bool = True,
+    ) -> None:
+        if washer_id <= 0:
+            raise BranchOfficeWasherValidationError("Lavador no válido")
+        if branch_office_id <= 0:
+            raise BranchOfficeWasherValidationError("Seleccione una sucursal")
+
+        branch = self.db.get(BranchOffice, branch_office_id)
+        if branch is None or not branch.is_active:
+            raise BranchOfficeWasherValidationError("La sucursal no existe")
+
+        now = self._now()
+        active_rows = self.db.scalars(
+            self._active_filter(select(BranchOfficeWasher)).where(
+                BranchOfficeWasher.washer_id == washer_id,
+            ),
+        ).all()
+        for row in active_rows:
+            row.deleted_date = now
+            row.updated_date = now
+
+        self.db.add(
+            BranchOfficeWasher(
+                branch_office_id=branch_office_id,
+                washer_id=washer_id,
+                added_date=now,
+                updated_date=now,
+                deleted_date=None,
+            ),
+        )
+        if commit:
+            self.db.commit()
+
+    def soft_delete_for_washer(self, washer_id: int, *, commit: bool = True) -> None:
+        if washer_id <= 0:
+            return
+        now = self._now()
+        rows = self.db.scalars(
+            self._active_filter(select(BranchOfficeWasher)).where(
+                BranchOfficeWasher.washer_id == washer_id,
+            ),
+        ).all()
+        for row in rows:
+            row.deleted_date = now
+            row.updated_date = now
+        if commit and rows:
+            self.db.commit()
