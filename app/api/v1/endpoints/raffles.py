@@ -4,6 +4,7 @@ from app.api.deps import RaffleServiceDep
 from app.schemas.raffle import (
     ErrorResponse,
     RaffleCreate,
+    RaffleCurrentResponse,
     RaffleDeleteResponse,
     RaffleDrawResponse,
     RaffleItemResponse,
@@ -23,6 +24,15 @@ router = APIRouter(prefix="/raffles", tags=["raffles"])
 )
 def list_raffles(service: RaffleServiceDep) -> RaffleListResponse:
     return RaffleListResponse(items=service.list_all())
+
+
+@router.get(
+    "/current",
+    response_model=RaffleCurrentResponse,
+    responses={401: {"model": ErrorResponse}},
+)
+def get_current_raffle(service: RaffleServiceDep) -> RaffleCurrentResponse:
+    return RaffleCurrentResponse(item=service.get_current_active_public())
 
 
 @router.post(

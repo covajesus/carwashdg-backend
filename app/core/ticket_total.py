@@ -26,7 +26,8 @@ def _line_amount(line: TicketBranchOfficeService) -> int:
     return 0
 
 
-def _subtotal_for_ticket(db: Session, ticket_id: int) -> int:
+def _gross_lines_total_for_ticket(db: Session, ticket_id: int) -> int:
+    """Suma de montos brutos de líneas activas."""
     stmt = select(TicketBranchOfficeService).where(
         TicketBranchOfficeService.ticket_id == ticket_id,
         TicketBranchOfficeService.deleted_date.is_(None),
@@ -36,7 +37,7 @@ def _subtotal_for_ticket(db: Session, ticket_id: int) -> int:
 
 def sync_ticket_total(db: Session, ticket_id: int, *, apply_iva: bool = True) -> int:
     pricing = ticket_totals_from_subtotal(
-        _subtotal_for_ticket(db, ticket_id),
+        _gross_lines_total_for_ticket(db, ticket_id),
         apply_iva=apply_iva,
     )
     row = db.get(Ticket, ticket_id)

@@ -1,6 +1,6 @@
 from decimal import Decimal, ROUND_HALF_UP
 
-TICKET_IVA_RATE = Decimal("0.19")
+TICKET_IVA_GROSS_FACTOR = Decimal("1.19")
 
 
 def round_pesos(value: Decimal | int | float | str) -> int:
@@ -10,11 +10,15 @@ def round_pesos(value: Decimal | int | float | str) -> int:
 
 
 def ticket_totals_from_subtotal(
-    subtotal: Decimal | int | float,
+    gross_amount: Decimal | int | float,
     *,
     apply_iva: bool = True,
 ) -> dict[str, int]:
-    subtotal_int = round_pesos(subtotal)
-    tax = round_pesos(subtotal_int * TICKET_IVA_RATE) if apply_iva else 0
-    total = subtotal_int + tax
-    return {"subtotal": subtotal_int, "iva": tax, "tax": tax, "total": total}
+    """Suma de montos de línea en pesos brutos (con IVA incluido si aplica)."""
+    gross_int = round_pesos(gross_amount)
+    if not apply_iva:
+        return {"subtotal": gross_int, "iva": 0, "tax": 0, "total": gross_int}
+
+    net = round_pesos(Decimal(gross_int) / TICKET_IVA_GROSS_FACTOR)
+    tax = gross_int - net
+    return {"subtotal": net, "iva": tax, "tax": tax, "total": gross_int}

@@ -12,12 +12,14 @@ from app.models.status import Status
 from app.models.ticket import Ticket
 from app.schemas.ticket import (
     TicketCreate,
+    TicketCreateResponse,
     TicketDetailResponse,
     TicketListItem,
     TicketPublic,
     TicketSummaryResponse,
     TicketUpdate,
 )
+from app.services.raffle_service import RaffleService, RaffleValidationError
 from app.services.ticket_line_service import TicketLineService, TicketLineValidationError
 
 
@@ -37,6 +39,7 @@ class TicketService:
     def __init__(self, db: Session) -> None:
         self.db = db
         self._lines = TicketLineService(db)
+        self._raffles = RaffleService(db)
 
     @staticmethod
     def _now() -> datetime:
@@ -118,14 +121,29 @@ class TicketService:
         tax = parse_ticket_total(row.tax) or 0
         return {"subtotal": subtotal, "iva": tax, "tax": tax, "total": total}
 
+    @staticmethod
+    def _infer_apply_iva_from_row(row: Ticket) -> bool:
+        if row.payment_type_id == PAYMENT_TYPE_TRANSBANK:
+            return True
+        tax = parse_ticket_total(row.tax)
+        if tax is not None:
+            return tax > 0
+        return False
+
     def _ticket_pricing(self, ticket_id: int, row: Ticket | None = None) -> dict[str, int]:
         if row is not None:
             stored = self._stored_pricing(row)
             if stored is not None:
                 return stored
+        ticket_row = row if row is not None else self.db.get(Ticket, ticket_id)
+        apply_iva = (
+            self._infer_apply_iva_from_row(ticket_row)
+            if ticket_row is not None
+            else False
+        )
         lines = self._lines.list_lines_for_ticket(ticket_id)
-        subtotal = sum(line.price for line in lines)
-        return ticket_totals_from_subtotal(subtotal, apply_iva=True)
+        gross = sum(line.price for line in lines)
+        return ticket_totals_from_subtotal(gross, apply_iva=apply_iva)
 
     @staticmethod
     def _resolve_apply_iva(data: TicketCreate) -> bool:
@@ -186,9 +204,15 @@ class TicketService:
             raise TicketNotFoundError()
         return self.to_public(row)
 
-    def create(self, data: TicketCreate) -> TicketPublic:
+    def create(self, data: TicketCreate) -> TicketCreateResponse:
         if data.payment_type_id not in (PAYMENT_TYPE_EFECTIVO, PAYMENT_TYPE_TRANSBANK):
             raise TicketValidationError("Seleccione el método de pago")
+
+        active_raffle = self._raffles.get_current_active_raffle()
+        if active_raffle is not None and not data.customer_id:
+            raise TicketValidationError(
+                "Hay una rifa activa: registre o seleccione un cliente para participar",
+            )
 
         now = self._now()
         row = Ticket(
@@ -251,12 +275,31 @@ class TicketService:
                 row.tax = str(round_pesos(data.tax or 0))
                 row.total = str(round_pesos(data.total))
 
+            raffle_assignment = None
+            if active_raffle is not None and data.customer_id:
+                try:
+                    raffle_assignment = self._raffles.assign_number_for_customer(
+                        active_raffle.id,
+                        data.customer_id,
+                        ticket_id=row.id,
+                        commit=False,
+                    )
+                except RaffleValidationError as exc:
+                    self.db.rollback()
+                    raise TicketValidationError(str(exc)) from exc
+
             self.db.commit()
             self.db.refresh(row)
-            return self.to_public(row)
+            return TicketCreateResponse(
+                item=self.to_public(row),
+                raffle=raffle_assignment,
+            )
         except TicketLineValidationError as exc:
             self.db.rollback()
             raise TicketValidationError(str(exc)) from exc
+        except TicketValidationError:
+            self.db.rollback()
+            raise
         except Exception:
             self.db.rollback()
             raise

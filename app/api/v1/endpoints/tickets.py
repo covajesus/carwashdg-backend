@@ -4,6 +4,7 @@ from app.api.deps import TicketServiceDep
 from app.schemas.ticket import (
     ErrorResponse,
     TicketCreate,
+    TicketCreateResponse,
     TicketDeleteResponse,
     TicketDetailResponse,
     TicketItemResponse,
@@ -26,10 +27,10 @@ def tickets_summary(service: TicketServiceDep) -> TicketSummaryResponse:
     return service.summary_for_admin()
 
 
-@router.post("", response_model=TicketItemResponse, status_code=status.HTTP_201_CREATED)
-def create_ticket(body: TicketCreate, service: TicketServiceDep) -> TicketItemResponse:
+@router.post("", response_model=TicketCreateResponse, status_code=status.HTTP_201_CREATED)
+def create_ticket(body: TicketCreate, service: TicketServiceDep) -> TicketCreateResponse:
     try:
-        return TicketItemResponse(item=service.create(body))
+        return service.create(body)
     except TicketValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

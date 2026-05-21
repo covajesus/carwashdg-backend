@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.schemas.raffle import RaffleAssignmentPublic
+
 
 class TicketBranchOfficeServiceLineInput(BaseModel):
     """branch_office_service_id=0 + additional_service para servicios escritos a mano."""
@@ -113,6 +115,11 @@ class TicketDetailResponse(BaseModel):
 
 class TicketItemResponse(BaseModel):
     item: TicketPublic
+
+
+class TicketCreateResponse(BaseModel):
+    item: TicketPublic
+    raffle: RaffleAssignmentPublic | None = None
 
 
 class TicketDeleteResponse(BaseModel):
