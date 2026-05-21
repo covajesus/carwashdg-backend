@@ -19,6 +19,7 @@ from app.schemas.ticket import (
     TicketSummaryResponse,
     TicketUpdate,
 )
+from app.schemas.user import UserPublic
 from app.services.raffle_service import RaffleService, RaffleValidationError
 from app.services.ticket_line_service import TicketLineService, TicketLineValidationError
 
@@ -85,6 +86,96 @@ class TicketService:
                 return customer.full_name
             return ticket.license_plate_id
         return "—"
+
+    @staticmethod
+    def _branch_scope_for_user(user: UserPublic) -> int | None:
+        """
+        None: administrador, sin filtro de sucursal.
+        int >= 1: gerente, solo esa sucursal.
+        0: gerente sin sucursal u otro rol → sin tickets visibles.
+        """
+        if user.role == "admin":
+            return None
+        if user.role == "manager":
+            bid = user.branchOfficeId
+            return bid if bid is not None and bid >= 1 else 0
+        return 0
+
+    def _ticket_ids_for_branch_subquery(self, branch_office_id: int):
+        from app.models.branch_office_washer import BranchOfficeWasher
+        from app.models.ticket_branch_office_service import TicketBranchOfficeService
+
+        via_bos = (
+            select(TicketBranchOfficeService.ticket_id)
+            .join(
+                BranchOfficeService,
+                TicketBranchOfficeService.branch_office_service_id == BranchOfficeService.id,
+            )
+            .where(
+                BranchOfficeService.branch_office_id == branch_office_id,
+                TicketBranchOfficeService.deleted_date.is_(None),
+                TicketBranchOfficeService.ticket_id.isnot(None),
+                TicketBranchOfficeService.branch_office_service_id.isnot(None),
+                TicketBranchOfficeService.branch_office_service_id > 0,
+            )
+        )
+        via_washer = (
+            select(TicketBranchOfficeService.ticket_id)
+            .join(
+                BranchOfficeWasher,
+                TicketBranchOfficeService.washer_id == BranchOfficeWasher.washer_id,
+            )
+            .where(
+                BranchOfficeWasher.branch_office_id == branch_office_id,
+                BranchOfficeWasher.deleted_date.is_(None),
+                TicketBranchOfficeService.deleted_date.is_(None),
+                TicketBranchOfficeService.ticket_id.isnot(None),
+                TicketBranchOfficeService.washer_id.isnot(None),
+            )
+        )
+        return via_bos.union(via_washer)
+
+    def _list_stmt_for_user(self, user: UserPublic):
+        stmt = self._active_filter(select(Ticket)).order_by(Ticket.added_date.desc())
+        branch_scope = self._branch_scope_for_user(user)
+        if branch_scope is None:
+            return stmt
+        if branch_scope == 0:
+            return stmt.where(Ticket.id < 0)
+        return stmt.where(Ticket.id.in_(self._ticket_ids_for_branch_subquery(branch_scope)))
+
+    def _ticket_matches_branch(self, ticket_id: int, branch_office_id: int) -> bool:
+        if self._branch_id_for_ticket(ticket_id) == str(branch_office_id):
+            return True
+        from app.models.branch_office_washer import BranchOfficeWasher
+        from app.models.ticket_branch_office_service import TicketBranchOfficeService
+
+        stmt = (
+            select(TicketBranchOfficeService.id)
+            .join(
+                BranchOfficeWasher,
+                TicketBranchOfficeService.washer_id == BranchOfficeWasher.washer_id,
+            )
+            .where(
+                TicketBranchOfficeService.ticket_id == ticket_id,
+                TicketBranchOfficeService.deleted_date.is_(None),
+                BranchOfficeWasher.branch_office_id == branch_office_id,
+                BranchOfficeWasher.deleted_date.is_(None),
+            )
+            .limit(1)
+        )
+        return self.db.scalars(stmt).first() is not None
+
+    def _get_visible_ticket(self, ticket_id: int, user: UserPublic) -> Ticket:
+        row = self.db.get(Ticket, ticket_id)
+        if row is None or not row.is_active:
+            raise TicketNotFoundError()
+        branch_scope = self._branch_scope_for_user(user)
+        if branch_scope is None:
+            return row
+        if branch_scope == 0 or not self._ticket_matches_branch(ticket_id, branch_scope):
+            raise TicketNotFoundError()
+        return row
 
     def _branch_id_for_ticket(self, ticket_id: int) -> str:
         from app.models.ticket_branch_office_service import TicketBranchOfficeService
@@ -168,22 +259,19 @@ class TicketService:
             customer_name=self._customer_name(row),
         )
 
-    def list_for_admin(self) -> list[TicketListItem]:
-        stmt = self._active_filter(select(Ticket)).order_by(Ticket.added_date.desc())
+    def list_for_user(self, user: UserPublic) -> list[TicketListItem]:
+        stmt = self._list_stmt_for_user(user)
         return [self._to_list_item(row) for row in self.db.scalars(stmt).all()]
 
-    def summary_for_admin(self) -> TicketSummaryResponse:
-        items = self.list_for_admin()
+    def summary_for_user(self, user: UserPublic) -> TicketSummaryResponse:
+        items = self.list_for_user(user)
         return TicketSummaryResponse(
             totalEarnings=sum(item.total for item in items),
             ticketCount=len(items),
         )
 
-    def get_detail(self, ticket_id: int) -> TicketDetailResponse:
-        row = self.db.get(Ticket, ticket_id)
-        if row is None or not row.is_active:
-            raise TicketNotFoundError()
-
+    def get_detail(self, ticket_id: int, user: UserPublic) -> TicketDetailResponse:
+        row = self._get_visible_ticket(ticket_id, user)
         item = self._to_list_item(row)
         lines = self._lines.list_lines_for_ticket(ticket_id)
         pricing = self._ticket_pricing(ticket_id, row)
@@ -197,11 +285,8 @@ class TicketService:
             total=pricing["total"],
         )
 
-    def get_by_id(self, ticket_id: int) -> TicketPublic:
-        stmt = self._active_filter(select(Ticket)).where(Ticket.id == ticket_id)
-        row = self.db.scalars(stmt).first()
-        if row is None:
-            raise TicketNotFoundError()
+    def get_by_id(self, ticket_id: int, user: UserPublic) -> TicketPublic:
+        row = self._get_visible_ticket(ticket_id, user)
         return self.to_public(row)
 
     def create(self, data: TicketCreate) -> TicketCreateResponse:
@@ -304,10 +389,8 @@ class TicketService:
             self.db.rollback()
             raise
 
-    def update(self, ticket_id: int, data: TicketUpdate) -> TicketPublic:
-        row = self.db.get(Ticket, ticket_id)
-        if row is None or not row.is_active:
-            raise TicketNotFoundError()
+    def update(self, ticket_id: int, data: TicketUpdate, user: UserPublic) -> TicketPublic:
+        row = self._get_visible_ticket(ticket_id, user)
 
         patch = data.model_dump(exclude_unset=True)
         for key, value in patch.items():
@@ -324,11 +407,9 @@ class TicketService:
         self.db.refresh(row)
         return self.to_public(row)
 
-    def delete(self, ticket_id: int) -> None:
+    def delete(self, ticket_id: int, user: UserPublic) -> None:
         """Elimina el ticket y todas sus líneas en tickets_branch_offices_services (soft delete)."""
-        row = self.db.get(Ticket, ticket_id)
-        if row is None or not row.is_active:
-            raise TicketNotFoundError()
+        row = self._get_visible_ticket(ticket_id, user)
         now = self._now()
         try:
             self._lines.soft_delete_for_ticket(ticket_id, deleted_at=now)

@@ -5,10 +5,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.datetime_utils import datetime_to_iso
-from app.core.user_status import active_from_status_id
 from app.models.raffle import Raffle
 from app.models.raffle_number import RaffleNumber
-from app.models.status import Status
 from app.schemas.raffle import (
     RaffleAssignmentPublic,
     RaffleCreate,
@@ -40,14 +38,22 @@ class RaffleService:
         return datetime.now()
 
     @staticmethod
-    def _parse_datetime(value: str | None, *, field_label: str) -> datetime:
+    def _parse_date_bound(
+        value: str | None,
+        *,
+        field_label: str,
+        end_of_day: bool = False,
+    ) -> datetime:
         if value is None or not str(value).strip():
             raise RaffleValidationError(f"{field_label} es obligatoria")
         raw = str(value).strip().replace(" ", "T")
         try:
-            return datetime.fromisoformat(raw)
+            dt = datetime.fromisoformat(raw)
         except ValueError as exc:
             raise RaffleValidationError(f"{field_label} inválida") from exc
+        if end_of_day and (len(raw) == 10 or dt.hour + dt.minute + dt.second == 0):
+            return dt.replace(hour=23, minute=59, second=59)
+        return dt
 
     @staticmethod
     def _validate_date_range(start: datetime, end: datetime) -> None:
@@ -60,7 +66,6 @@ class RaffleService:
     def _raffle_to_public(row: Raffle) -> RafflePublic:
         return RafflePublic(
             id=str(row.id),
-            status_id=str(row.status_id) if row.status_id is not None else None,
             raffle=row.raffle or "",
             start_date=datetime_to_iso(row.start_date),
             end_date=datetime_to_iso(row.end_date),
@@ -76,12 +81,6 @@ class RaffleService:
         if row.end_date is not None and when > row.end_date:
             return False
         return True
-
-    @staticmethod
-    def _raffle_status_active(row: Raffle) -> bool:
-        if row.status_id is None:
-            return True
-        return active_from_status_id(row.status_id)
 
     @staticmethod
     def _number_to_public(row: RaffleNumber) -> RaffleNumberPublic:
@@ -101,13 +100,6 @@ class RaffleService:
 
     def _active_numbers(self, stmt):
         return stmt.where(RaffleNumber.deleted_date.is_(None))
-
-    def _validate_status_id(self, status_id: int | None) -> None:
-        if status_id is None:
-            return
-        row = self.db.get(Status, status_id)
-        if row is None or not row.is_active:
-            raise RaffleValidationError("El estatus no existe")
 
     def _get_active_raffle(self, raffle_id: int) -> Raffle:
         stmt = self._active_raffles(select(Raffle)).where(Raffle.id == raffle_id)
@@ -139,15 +131,10 @@ class RaffleService:
         return self._raffle_to_public(row)
 
     def get_current_active_raffle(self) -> Raffle | None:
-        """Rifa no eliminada, estatus abierto y dentro de vigencia (si hay fechas)."""
+        """Rifa no eliminada y dentro de vigencia (inicio / fin)."""
         now = self._now()
-        stmt = (
-            self._active_raffles(select(Raffle))
-            .order_by(Raffle.id.desc())
-        )
+        stmt = self._active_raffles(select(Raffle)).order_by(Raffle.id.desc())
         for row in self.db.scalars(stmt).all():
-            if not self._raffle_status_active(row):
-                continue
             if self._is_raffle_in_period(row, now):
                 return row
         return None
@@ -205,8 +192,6 @@ class RaffleService:
 
         raffle = self._get_active_raffle(raffle_id)
         now = self._now()
-        if not self._raffle_status_active(raffle):
-            raise RaffleValidationError("La rifa no está activa")
         if not self._is_raffle_in_period(raffle, now):
             raise RaffleValidationError("La rifa no está en período de vigencia")
 
@@ -252,17 +237,22 @@ class RaffleService:
         name = data.raffle.strip()
         if not name:
             raise RaffleValidationError("El nombre del sorteo es obligatorio")
-        self._validate_status_id(data.status_id)
         if self._find_duplicate_name(name):
             raise RaffleValidationError("Ya existe un sorteo con ese nombre")
 
-        start = self._parse_datetime(data.start_date, field_label="La fecha de inicio")
-        end = self._parse_datetime(data.end_date, field_label="La fecha de fin")
+        start = self._parse_date_bound(
+            data.start_date,
+            field_label="La fecha de inicio",
+        )
+        end = self._parse_date_bound(
+            data.end_date,
+            field_label="La fecha de fin",
+            end_of_day=True,
+        )
         self._validate_date_range(start, end)
 
         now = self._now()
         row = Raffle(
-            status_id=data.status_id,
             raffle=name,
             start_date=start,
             end_date=end,
@@ -279,10 +269,6 @@ class RaffleService:
         row = self._get_active_raffle(raffle_id)
         patch = data.model_dump(exclude_unset=True)
 
-        if "status_id" in patch:
-            self._validate_status_id(patch["status_id"])
-            row.status_id = patch["status_id"]
-
         if "raffle" in patch and patch["raffle"] is not None:
             name = patch["raffle"].strip()
             if not name:
@@ -294,10 +280,17 @@ class RaffleService:
         start = row.start_date
         end = row.end_date
         if "start_date" in patch:
-            start = self._parse_datetime(patch["start_date"], field_label="La fecha de inicio")
+            start = self._parse_date_bound(
+                patch["start_date"],
+                field_label="La fecha de inicio",
+            )
             row.start_date = start
         if "end_date" in patch:
-            end = self._parse_datetime(patch["end_date"], field_label="La fecha de fin")
+            end = self._parse_date_bound(
+                patch["end_date"],
+                field_label="La fecha de fin",
+                end_of_day=True,
+            )
             row.end_date = end
         if start is not None and end is not None:
             self._validate_date_range(start, end)
