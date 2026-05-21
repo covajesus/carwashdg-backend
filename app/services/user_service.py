@@ -55,11 +55,19 @@ class UserService:
 
     def to_public(self, row: User) -> UserPublic:
         branch_office_id: int | None = None
+        week_percentage: str | None = None
+        sunday_percentage: str | None = None
+        daily_goal: str | None = None
+        daily_goal_percentage: str | None = None
         if row.id:
             if row.rol_id == WASHER_ROL_ID:
-                office_id = self._branch_washer.get_branch_office_id_for_washer(row.id)
-                if office_id is not None:
-                    branch_office_id = office_id
+                assignment = self._branch_washer.get_active_assignment_for_washer(row.id)
+                if assignment is not None and assignment.branch_office_id is not None:
+                    branch_office_id = assignment.branch_office_id
+                    week_percentage = assignment.week_percentage
+                    sunday_percentage = assignment.sunday_percentage
+                    daily_goal = assignment.daily_goal
+                    daily_goal_percentage = assignment.daily_goal_percentage
             elif row.rol_id == MANAGER_ROL_ID:
                 office_id = self._branch_manager.get_branch_office_id_for_manager(row.id)
                 if office_id is not None:
@@ -70,6 +78,10 @@ class UserService:
             email=row.email,
             role=role_from_id(row.rol_id),
             branchOfficeId=branch_office_id,
+            weekPercentage=week_percentage,
+            sundayPercentage=sunday_percentage,
+            dailyGoal=daily_goal,
+            dailyGoalPercentage=daily_goal_percentage,
             statusId=str(row.status_id) if row.status_id is not None else None,
             active=active_from_status_id(row.status_id),
         )
@@ -235,6 +247,10 @@ class UserService:
                 self._branch_washer.assign_washer_to_branch(
                     row.id,
                     branch_office_id,
+                    week_percentage=data.weekPercentage,
+                    sunday_percentage=data.sundayPercentage,
+                    daily_goal=data.dailyGoal,
+                    daily_goal_percentage=data.dailyGoalPercentage,
                     commit=False,
                 )
             elif rol_id == MANAGER_ROL_ID:
@@ -301,8 +317,30 @@ class UserService:
                     self._branch_washer.assign_washer_to_branch(
                         user_id,
                         branch_office_id,
+                        week_percentage=data.weekPercentage,
+                        sunday_percentage=data.sundayPercentage,
+                        daily_goal=data.dailyGoal,
+                        daily_goal_percentage=data.dailyGoalPercentage,
                         commit=False,
                     )
+            elif (
+                new_rol_id == WASHER_ROL_ID
+                and data.branchOfficeId is None
+                and (
+                    data.weekPercentage is not None
+                    or data.sundayPercentage is not None
+                    or data.dailyGoal is not None
+                    or data.dailyGoalPercentage is not None
+                )
+            ):
+                self._branch_washer.update_washer_percentages(
+                    user_id,
+                    week_percentage=data.weekPercentage,
+                    sunday_percentage=data.sundayPercentage,
+                    daily_goal=data.dailyGoal,
+                    daily_goal_percentage=data.dailyGoalPercentage,
+                    commit=False,
+                )
             elif new_rol_id == MANAGER_ROL_ID and data.branchOfficeId is not None:
                 branch_office_id = self._parse_branch_office_id(data.branchOfficeId)
                 if branch_office_id is not None:

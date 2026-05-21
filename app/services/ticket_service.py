@@ -3,8 +3,8 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.pricing import ticket_totals_from_subtotal
-from app.core.ticket_total import parse_ticket_total
+from app.core.pricing import round_pesos, ticket_totals_from_subtotal
+from app.core.ticket_total import parse_ticket_total, sync_ticket_total
 from app.models.branch_office import BranchOffice
 from app.models.branch_office_service import BranchOfficeService
 from app.models.customer import Customer
@@ -238,13 +238,18 @@ class TicketService:
                     commit=False,
                 )
 
-            lines = self._lines.list_lines_for_ticket(row.id)
-            subtotal = sum(line.price for line in lines)
+            self.db.flush()
             apply_iva = self._resolve_apply_iva(data)
-            pricing = ticket_totals_from_subtotal(subtotal, apply_iva=apply_iva)
-            row.subtotal = str(pricing["subtotal"])
-            row.tax = str(pricing["tax"])
-            row.total = str(pricing["total"])
+            sync_ticket_total(self.db, row.id, apply_iva=apply_iva)
+
+            if (
+                parse_ticket_total(row.total) in (None, 0)
+                and data.total is not None
+                and round_pesos(data.total) > 0
+            ):
+                row.subtotal = str(round_pesos(data.subtotal or 0))
+                row.tax = str(round_pesos(data.tax or 0))
+                row.total = str(round_pesos(data.total))
 
             self.db.commit()
             self.db.refresh(row)
@@ -277,6 +282,7 @@ class TicketService:
         return self.to_public(row)
 
     def delete(self, ticket_id: int) -> None:
+        """Elimina el ticket y todas sus líneas en tickets_branch_offices_services (soft delete)."""
         row = self.db.get(Ticket, ticket_id)
         if row is None or not row.is_active:
             raise TicketNotFoundError()

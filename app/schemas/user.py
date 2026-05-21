@@ -12,6 +12,10 @@ class UserCreate(BaseModel):
     password: str = Field(..., min_length=6, max_length=255)
     role: UserRole = "washer"
     branchOfficeId: int | None = Field(default=None, ge=1)
+    weekPercentage: str | None = Field(default=None, max_length=255)
+    sundayPercentage: str | None = Field(default=None, max_length=255)
+    dailyGoal: str | None = Field(default=None, max_length=255)
+    dailyGoalPercentage: str | None = Field(default=None, max_length=255)
     active: bool = True
     statusId: str | None = None
 
@@ -22,6 +26,10 @@ class UserUpdate(BaseModel):
     password: str | None = Field(default=None, min_length=6, max_length=255)
     role: UserRole | None = None
     branchOfficeId: int | None = Field(default=None, ge=1)
+    weekPercentage: str | None = Field(default=None, max_length=255)
+    sundayPercentage: str | None = Field(default=None, max_length=255)
+    dailyGoal: str | None = Field(default=None, max_length=255)
+    dailyGoalPercentage: str | None = Field(default=None, max_length=255)
     active: bool | None = None
     statusId: str | None = None
 
@@ -32,6 +40,10 @@ class UserPublic(BaseModel):
     email: str
     role: UserRole
     branchOfficeId: int | None = Field(default=None, ge=1)
+    weekPercentage: str | None = None
+    sundayPercentage: str | None = None
+    dailyGoal: str | None = None
+    dailyGoalPercentage: str | None = None
     statusId: str | None = None
     active: bool
 
