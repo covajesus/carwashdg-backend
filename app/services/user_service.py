@@ -5,7 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.roles import WASHER_ROL_ID, role_from_id, role_id_from_role
+from app.core.roles import MANAGER_ROL_ID, WASHER_ROL_ID, role_from_id, role_id_from_role
 from app.core.security import hash_password, verify_password
 from app.core.user_status import (
     STATUS_ABIERTO_ID,
@@ -15,6 +15,10 @@ from app.core.user_status import (
 from app.models.status import Status
 from app.models.user import User
 from app.schemas.user import UserCreate, UserPublic, UserRole, UserUpdate
+from app.services.branch_office_manager_service import (
+    BranchOfficeManagerService,
+    BranchOfficeManagerValidationError,
+)
 from app.services.branch_office_washer_service import (
     BranchOfficeWasherService,
     BranchOfficeWasherValidationError,
@@ -39,6 +43,7 @@ class UserService:
     def __init__(self, db: Session) -> None:
         self.db = db
         self._branch_washer = BranchOfficeWasherService(db)
+        self._branch_manager = BranchOfficeManagerService(db)
 
     @staticmethod
     def _now() -> datetime:
@@ -50,10 +55,15 @@ class UserService:
 
     def to_public(self, row: User) -> UserPublic:
         branch_office_id: int | None = None
-        if row.rol_id == WASHER_ROL_ID and row.id:
-            office_id = self._branch_washer.get_branch_office_id_for_washer(row.id)
-            if office_id is not None:
-                branch_office_id = office_id
+        if row.id:
+            if row.rol_id == WASHER_ROL_ID:
+                office_id = self._branch_washer.get_branch_office_id_for_washer(row.id)
+                if office_id is not None:
+                    branch_office_id = office_id
+            elif row.rol_id == MANAGER_ROL_ID:
+                office_id = self._branch_manager.get_branch_office_id_for_manager(row.id)
+                if office_id is not None:
+                    branch_office_id = office_id
         return UserPublic(
             id=str(row.id),
             fullName=row.full_name,
@@ -227,11 +237,20 @@ class UserService:
                     branch_office_id,
                     commit=False,
                 )
+            elif rol_id == MANAGER_ROL_ID:
+                branch_office_id = self._parse_branch_office_id(data.branchOfficeId)
+                if branch_office_id is None:
+                    raise UserValidationError("Seleccione una sucursal para el gerente")
+                self._branch_manager.assign_manager_to_branch(
+                    row.id,
+                    branch_office_id,
+                    commit=False,
+                )
 
             self.db.commit()
             self.db.refresh(row)
             return self.to_public(row)
-        except BranchOfficeWasherValidationError as exc:
+        except (BranchOfficeWasherValidationError, BranchOfficeManagerValidationError) as exc:
             self.db.rollback()
             raise UserValidationError(str(exc)) from exc
         except Exception:
@@ -278,19 +297,32 @@ class UserService:
             if new_rol_id == WASHER_ROL_ID and data.branchOfficeId is not None:
                 branch_office_id = self._parse_branch_office_id(data.branchOfficeId)
                 if branch_office_id is not None:
+                    self._branch_manager.soft_delete_for_manager(user_id, commit=False)
                     self._branch_washer.assign_washer_to_branch(
                         user_id,
                         branch_office_id,
                         commit=False,
                     )
-            elif data.role is not None and new_rol_id != WASHER_ROL_ID:
-                self._branch_washer.soft_delete_for_washer(user_id, commit=False)
+            elif new_rol_id == MANAGER_ROL_ID and data.branchOfficeId is not None:
+                branch_office_id = self._parse_branch_office_id(data.branchOfficeId)
+                if branch_office_id is not None:
+                    self._branch_washer.soft_delete_for_washer(user_id, commit=False)
+                    self._branch_manager.assign_manager_to_branch(
+                        user_id,
+                        branch_office_id,
+                        commit=False,
+                    )
+            elif data.role is not None:
+                if new_rol_id != WASHER_ROL_ID:
+                    self._branch_washer.soft_delete_for_washer(user_id, commit=False)
+                if new_rol_id != MANAGER_ROL_ID:
+                    self._branch_manager.soft_delete_for_manager(user_id, commit=False)
 
             row.updated_date = self._now()
             self.db.commit()
             self.db.refresh(row)
             return self.to_public(row)
-        except BranchOfficeWasherValidationError as exc:
+        except (BranchOfficeWasherValidationError, BranchOfficeManagerValidationError) as exc:
             self.db.rollback()
             raise UserValidationError(str(exc)) from exc
         except Exception:
@@ -303,6 +335,7 @@ class UserService:
             raise UserNotFoundError()
         now = self._now()
         self._branch_washer.soft_delete_for_washer(user_id, commit=False)
+        self._branch_manager.soft_delete_for_manager(user_id, commit=False)
         row.deleted_date = now
         row.updated_date = now
         self.db.commit()

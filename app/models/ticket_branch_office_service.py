@@ -13,6 +13,7 @@ class TicketBranchOfficeService(Base):
     ticket_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     branch_office_service_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     washer_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total: Mapped[int | None] = mapped_column(Integer, nullable=True)
     added_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     updated_date: Mapped[str | None] = mapped_column(String(255), nullable=True)
     deleted_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

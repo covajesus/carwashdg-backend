@@ -38,7 +38,12 @@ class TicketLineService:
         return datetime.now().isoformat()
 
     @staticmethod
-    def to_public(row: TicketBranchOfficeService) -> TicketBranchOfficeServicePublic:
+    def _resolved_line_total(row: TicketBranchOfficeService) -> int:
+        if row.total is not None:
+            return round_pesos(row.total)
+        return 0
+
+    def to_public(self, row: TicketBranchOfficeService) -> TicketBranchOfficeServicePublic:
         return TicketBranchOfficeServicePublic(
             id=str(row.id),
             ticket_id=str(row.ticket_id or ""),
@@ -48,6 +53,7 @@ class TicketLineService:
                 else None
             ),
             washer_id=str(row.washer_id) if row.washer_id is not None else None,
+            total=self._resolved_line_total(row),
             added_date=datetime_to_iso(row.added_date),
             updated_date=row.updated_date,
             deleted_date=datetime_to_iso(row.deleted_date),
@@ -93,7 +99,7 @@ class TicketLineService:
             branch_office_service_id=str(row.branch_office_service_id or ""),
             service_id=str(bos.service_id or ""),
             service_name=svc.service,
-            price=round_pesos(bos.price or 0),
+            price=self._resolved_line_total(row),
             washer_id=str(row.washer_id) if row.washer_id is not None else None,
             added_date=datetime_to_iso(row.added_date),
         )
@@ -162,19 +168,26 @@ class TicketLineService:
         self,
         *,
         ticket_id: int,
-        branch_office_service_ids: list[int],
+        branch_office_service_ids: list[int] | None = None,
+        lines: list[tuple[int, int]] | None = None,
         washer_id: int | None,
     ) -> None:
         """Inserta líneas en tickets_branch_offices_services (sin commit)."""
         if ticket_id <= 0:
             raise TicketLineValidationError("El ticket no es válido")
-        if not branch_office_service_ids:
+
+        items: list[tuple[int, int | None]] = []
+        if lines:
+            items = [(bos_id, line_total) for bos_id, line_total in lines]
+        elif branch_office_service_ids:
+            items = [(bos_id, None) for bos_id in branch_office_service_ids]
+        if not items:
             return
 
         now = self._now()
         ts = self._timestamp_str()
 
-        for bos_id in branch_office_service_ids:
+        for bos_id, line_total in items:
             if bos_id <= 0:
                 raise TicketLineValidationError("Servicio no válido")
 
@@ -186,12 +199,18 @@ class TicketLineService:
                 ticket_id=ticket_id,
                 washer_id=washer_id,
             )
+            if line_total is None:
+                raise TicketLineValidationError(
+                    "Indique el monto de cada servicio al crear el ticket",
+                )
+            stored_total = round_pesos(line_total)
 
             self.db.add(
                 TicketBranchOfficeService(
                     ticket_id=ticket_id,
                     branch_office_service_id=bos_id,
                     washer_id=resolved_washer,
+                    total=stored_total,
                     added_date=now,
                     updated_date=ts,
                     deleted_date=None,
@@ -231,10 +250,14 @@ class TicketLineService:
         if data.ticket_id <= 0:
             raise TicketLineValidationError("El ticket no es válido")
 
+        if data.total is None:
+            raise TicketLineValidationError("El monto del servicio es obligatorio")
+        stored_total = round_pesos(data.total)
         row = TicketBranchOfficeService(
             ticket_id=data.ticket_id,
             branch_office_service_id=data.branch_office_service_id,
             washer_id=washer_id,
+            total=stored_total,
             added_date=now,
             updated_date=ts,
             deleted_date=None,
@@ -270,6 +293,9 @@ class TicketLineService:
                 ticket_id=ticket_id,
                 washer_id=data.washer_id,
             )
+
+        if data.total is not None:
+            row.total = round_pesos(data.total)
 
         row.updated_date = self._timestamp_str()
         self.db.commit()

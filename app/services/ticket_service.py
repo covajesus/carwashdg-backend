@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.pricing import ticket_totals_from_subtotal
+from app.core.ticket_total import parse_ticket_total
 from app.models.branch_office import BranchOffice
 from app.models.branch_office_service import BranchOfficeService
 from app.models.customer import Customer
@@ -26,6 +27,10 @@ class TicketNotFoundError(Exception):
 
 class TicketValidationError(Exception):
     pass
+
+
+PAYMENT_TYPE_EFECTIVO = 1
+PAYMENT_TYPE_TRANSBANK = 2
 
 
 class TicketService:
@@ -101,13 +106,34 @@ class TicketService:
         branch = self.db.get(BranchOffice, int(branch_id))
         return branch.branch_office if branch else "—"
 
-    def _ticket_pricing(self, ticket_id: int) -> dict[str, int]:
+    @staticmethod
+    def _stored_pricing(row: Ticket) -> dict[str, int] | None:
+        subtotal = parse_ticket_total(row.subtotal)
+        total = parse_ticket_total(row.total)
+        if subtotal is None or total is None:
+            return None
+        tax = parse_ticket_total(row.tax) or 0
+        return {"subtotal": subtotal, "iva": tax, "tax": tax, "total": total}
+
+    def _ticket_pricing(self, ticket_id: int, row: Ticket | None = None) -> dict[str, int]:
+        if row is not None:
+            stored = self._stored_pricing(row)
+            if stored is not None:
+                return stored
         lines = self._lines.list_lines_for_ticket(ticket_id)
         subtotal = sum(line.price for line in lines)
-        return ticket_totals_from_subtotal(subtotal)
+        return ticket_totals_from_subtotal(subtotal, apply_iva=True)
+
+    @staticmethod
+    def _resolve_apply_iva(data: TicketCreate) -> bool:
+        if data.payment_type_id == PAYMENT_TYPE_TRANSBANK:
+            return True
+        if data.needs_tax_receipt is not None:
+            return data.needs_tax_receipt
+        return False
 
     def _to_list_item(self, row: Ticket) -> TicketListItem:
-        pricing = self._ticket_pricing(row.id)
+        pricing = self._ticket_pricing(row.id, row)
         created = row.added_date.isoformat() if row.added_date else ""
         return TicketListItem(
             id=str(row.id),
@@ -139,7 +165,7 @@ class TicketService:
 
         item = self._to_list_item(row)
         lines = self._lines.list_lines_for_ticket(ticket_id)
-        pricing = self._ticket_pricing(ticket_id)
+        pricing = self._ticket_pricing(ticket_id, row)
         return TicketDetailResponse(
             ticket=item,
             customer_name=self._customer_name(row),
@@ -158,6 +184,9 @@ class TicketService:
         return self.to_public(row)
 
     def create(self, data: TicketCreate) -> TicketPublic:
+        if data.payment_type_id not in (PAYMENT_TYPE_EFECTIVO, PAYMENT_TYPE_TRANSBANK):
+            raise TicketValidationError("Seleccione el método de pago")
+
         now = self._now()
         row = Ticket(
             customer_id=data.customer_id,
@@ -172,6 +201,11 @@ class TicketService:
             deleted_date=None,
         )
 
+        service_lines = [
+            (line.branch_office_service_id, line.total)
+            for line in data.branch_office_service_lines
+            if line.branch_office_service_id > 0
+        ]
         service_ids = [sid for sid in data.branch_office_service_ids if sid > 0]
 
         try:
@@ -181,11 +215,15 @@ class TicketService:
             if not row.id:
                 raise TicketValidationError("No se pudo crear el ticket en la tabla tickets")
 
-            if service_ids:
+            if service_lines:
                 self._lines.create_lines_for_ticket(
                     ticket_id=row.id,
-                    branch_office_service_ids=service_ids,
+                    lines=service_lines,
                     washer_id=data.washer_id,
+                )
+            elif service_ids:
+                raise TicketValidationError(
+                    "Indique el monto de cada servicio (branch_office_service_lines)",
                 )
             elif data.washer_id is not None:
                 self._lines.assign_washer_to_ticket(
@@ -194,10 +232,13 @@ class TicketService:
                     commit=False,
                 )
 
-            if data.total is not None and data.total >= 0:
-                row.total = str(data.total)
-            elif service_ids:
-                sync_ticket_total(self.db, row.id)
+            lines = self._lines.list_lines_for_ticket(row.id)
+            subtotal = sum(line.price for line in lines)
+            apply_iva = self._resolve_apply_iva(data)
+            pricing = ticket_totals_from_subtotal(subtotal, apply_iva=apply_iva)
+            row.subtotal = str(pricing["subtotal"])
+            row.tax = str(pricing["tax"])
+            row.total = str(pricing["total"])
 
             self.db.commit()
             self.db.refresh(row)

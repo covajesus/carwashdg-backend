@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 
 from app.api.deps import BranchOfficeServiceServiceDep
 from app.schemas.branch_office_service import (
@@ -31,11 +31,17 @@ def list_branch_office_services(
 def list_branch_office_services_by_branch(
     branch_office_id: int,
     service: BranchOfficeServiceServiceDep,
+    car_type_id: int | None = Query(default=None),
 ) -> BranchOfficeServiceListResponse:
     if branch_office_id < 1:
         raise HTTPException(status_code=400, detail="Sucursal no válida")
+    if car_type_id is not None and car_type_id < 1:
+        raise HTTPException(status_code=400, detail="Tipo de vehículo no válido")
     return BranchOfficeServiceListResponse(
-        items=service.list_all(branch_office_id=branch_office_id),
+        items=service.list_all(
+            branch_office_id=branch_office_id,
+            car_type_id=car_type_id,
+        ),
     )
 
 

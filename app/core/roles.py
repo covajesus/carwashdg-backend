@@ -15,6 +15,7 @@ ID_FROM_ROLE: dict[UserRole, int] = {
 }
 
 WASHER_ROL_ID: int = ID_FROM_ROLE["washer"]
+MANAGER_ROL_ID: int = ID_FROM_ROLE["manager"]
 
 
 def role_from_id(rol_id: int | None) -> UserRole:

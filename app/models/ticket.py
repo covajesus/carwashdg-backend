@@ -17,6 +17,8 @@ class Ticket(Base):
     payment_type_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tip: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    tax: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    subtotal: Mapped[str | None] = mapped_column(String(255), nullable=True)
     total: Mapped[str | None] = mapped_column(String(255), nullable=True)
     added_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     updated_date: Mapped[datetime | None] = mapped_column(
