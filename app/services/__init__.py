@@ -6,6 +6,7 @@ from app.services.car_type_service import CarTypeService
 from app.services.catalog_service import CatalogService
 from app.services.configuration_service import ConfigurationService
 from app.services.customer_service import CustomerService
+from app.services.raffle_service import RaffleService
 from app.services.rol_service import RolService
 from app.services.slider_service import SliderService
 from app.services.status_service import StatusService
@@ -22,6 +23,7 @@ __all__ = [
     "CatalogService",
     "ConfigurationService",
     "CustomerService",
+    "RaffleService",
     "RolService",
     "SliderService",
     "StatusService",

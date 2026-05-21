@@ -6,6 +6,8 @@ from app.models.branch_office_washer import BranchOfficeWasher
 from app.models.car_type import CarType
 from app.models.configuration import Configuration
 from app.models.customer import Customer
+from app.models.raffle import Raffle
+from app.models.raffle_number import RaffleNumber
 from app.models.rol import Rol
 from app.models.service import Service
 from app.models.slider import Slider
@@ -23,6 +25,8 @@ __all__ = [
     "CarType",
     "Configuration",
     "Customer",
+    "Raffle",
+    "RaffleNumber",
     "Rol",
     "Service",
     "Slider",

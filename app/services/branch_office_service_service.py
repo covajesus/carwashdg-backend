@@ -2,7 +2,7 @@ from datetime import datetime
 
 from sqlalchemy import select
 
-from app.core.pricing import round_amount
+from app.core.pricing import round_pesos
 from sqlalchemy.orm import Session
 
 from app.models.branch_office import BranchOffice
@@ -33,7 +33,7 @@ class BranchOfficeServiceService:
 
     @staticmethod
     def to_public(row: BranchOfficeService) -> BranchOfficeServicePublic:
-        price = round_amount(row.price or 0)
+        price = round_pesos(row.price or 0)
         return BranchOfficeServicePublic(
             id=str(row.id),
             branch_office_id=str(row.branch_office_id or ""),
@@ -86,7 +86,7 @@ class BranchOfficeServiceService:
         row = BranchOfficeService(
             branch_office_id=data.branch_office_id,
             service_id=data.service_id,
-            price=round_amount(data.price),
+            price=round_pesos(data.price),
             added_date=now,
             updated_date=now,
             deleted_date=None,
@@ -110,7 +110,7 @@ class BranchOfficeServiceService:
         if data.service_id is not None:
             row.service_id = data.service_id
         if data.price is not None:
-            row.price = round_amount(data.price)
+            row.price = round_pesos(data.price)
 
         row.updated_date = self._now()
         self.db.commit()
@@ -130,4 +130,4 @@ class BranchOfficeServiceService:
         row = self.db.get(BranchOfficeService, row_id)
         if row is None or not row.is_active:
             return 0
-        return round_amount(row.price or 0)
+        return round_pesos(row.price or 0)

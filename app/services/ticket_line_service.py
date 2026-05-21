@@ -4,8 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.datetime_utils import datetime_to_iso
-from app.core.pricing import round_amount
-from app.core.ticket_total import sync_ticket_total
+from app.core.pricing import round_pesos
 from app.models.branch_office_service import BranchOfficeService
 from app.models.service import Service
 from app.models.ticket_branch_office_service import TicketBranchOfficeService
@@ -94,7 +93,7 @@ class TicketLineService:
             branch_office_service_id=str(row.branch_office_service_id or ""),
             service_id=str(bos.service_id or ""),
             service_name=svc.service,
-            price=round_amount(bos.price or 0),
+            price=round_pesos(bos.price or 0),
             washer_id=str(row.washer_id) if row.washer_id is not None else None,
             added_date=datetime_to_iso(row.added_date),
         )
@@ -241,9 +240,6 @@ class TicketLineService:
             deleted_date=None,
         )
         self.db.add(row)
-        self.db.flush()
-        if row.ticket_id:
-            sync_ticket_total(self.db, row.ticket_id)
         self.db.commit()
         self.db.refresh(row)
         return self.to_public(row)
@@ -276,10 +272,6 @@ class TicketLineService:
             )
 
         row.updated_date = self._timestamp_str()
-        ticket_id = row.ticket_id
-        self.db.flush()
-        if ticket_id:
-            sync_ticket_total(self.db, ticket_id)
         self.db.commit()
         self.db.refresh(row)
         return self.to_public(row)
@@ -302,10 +294,6 @@ class TicketLineService:
         if row is None or not row.is_active:
             raise TicketLineNotFoundError()
         now = self._now()
-        ticket_id = row.ticket_id
         row.deleted_date = now
         row.updated_date = self._timestamp_str()
-        self.db.flush()
-        if ticket_id:
-            sync_ticket_total(self.db, ticket_id)
         self.db.commit()

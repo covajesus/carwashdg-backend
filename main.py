@@ -1,7 +1,9 @@
+import logging
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Request
+from sqlalchemy.exc import OperationalError
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -11,12 +13,32 @@ from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.services.user_service import UserService
 
+logger = logging.getLogger("uvicorn.error")
+
+
+def _mysql_auth_hint(exc: BaseException) -> str | None:
+    message = str(getattr(exc, "orig", exc)).lower()
+    if "mysql_native_password" in message or "1524" in message:
+        return (
+            "MySQL rechazó la conexión: el usuario usa mysql_native_password y el "
+            "servidor no carga ese plugin (común en MySQL 8.4+). En MySQL ejecute:\n"
+            "  ALTER USER 'su_usuario'@'localhost' IDENTIFIED WITH caching_sha2_password BY 'su_password';\n"
+            "  FLUSH PRIVILEGES;\n"
+            "Luego reinicie la API. Asegúrese de tener `cryptography` instalado (requirements.txt)."
+        )
+    return None
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     db = SessionLocal()
     try:
         UserService(db).ensure_default_admin()
+    except OperationalError as exc:
+        hint = _mysql_auth_hint(exc)
+        if hint:
+            logger.error(hint)
+        raise
     finally:
         db.close()
     yield

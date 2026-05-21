@@ -16,6 +16,7 @@ from app.services.car_type_service import CarTypeService
 from app.services.catalog_service import CatalogService
 from app.services.configuration_service import ConfigurationService
 from app.services.customer_service import CustomerService
+from app.services.raffle_service import RaffleService
 from app.services.rol_service import RolService
 from app.services.slider_service import SliderService
 from app.services.status_service import StatusService
@@ -63,6 +64,10 @@ def get_catalog_service(db: DbSession) -> CatalogService:
 
 def get_branch_office_service_service(db: DbSession) -> BranchOfficeServiceService:
     return BranchOfficeServiceService(db)
+
+
+def get_raffle_service(db: DbSession) -> RaffleService:
+    return RaffleService(db)
 
 
 def get_rol_service(db: DbSession) -> RolService:
@@ -128,6 +133,7 @@ BranchOfficeServiceServiceDep = Annotated[
     BranchOfficeServiceService,
     Depends(get_branch_office_service_service),
 ]
+RaffleServiceDep = Annotated[RaffleService, Depends(get_raffle_service)]
 RolServiceDep = Annotated[RolService, Depends(get_rol_service)]
 TicketServiceDep = Annotated[TicketService, Depends(get_ticket_service)]
 TicketLineServiceDep = Annotated[TicketLineService, Depends(get_ticket_line_service)]

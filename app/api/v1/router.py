@@ -10,6 +10,7 @@ from app.api.v1.endpoints import (
     configurations,
     customers,
     health,
+    raffles,
     roles,
     services,
     settings,
@@ -27,6 +28,7 @@ api_router.include_router(health.router)
 api_router.include_router(branches.router)
 api_router.include_router(car_types.router)
 api_router.include_router(statuses.router)
+api_router.include_router(raffles.router)
 api_router.include_router(sliders.router)
 api_router.include_router(brands.router)
 api_router.include_router(clients.router)
