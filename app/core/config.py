@@ -23,7 +23,17 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins_list(self) -> list[str]:
-        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+        """Accept origins in .env with or without trailing slash."""
+        origins: list[str] = []
+        for raw in self.cors_origins.split(","):
+            base = raw.strip()
+            if not base:
+                continue
+            normalized = base.rstrip("/")
+            for candidate in (normalized, f"{normalized}/"):
+                if candidate not in origins:
+                    origins.append(candidate)
+        return origins
 
 
 @lru_cache
