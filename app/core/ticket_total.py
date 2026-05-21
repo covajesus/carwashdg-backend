@@ -16,7 +16,10 @@ def parse_ticket_total(value: str | None) -> int | None:
 
 
 def _line_amount(line: TicketBranchOfficeService) -> int:
-    if line.branch_office_service_id is None:
+    additional = (line.additional_service or "").strip()
+    bos_id = line.branch_office_service_id
+    # Línea solo lavador (placeholder), sin servicio ni monto.
+    if bos_id is None and not additional:
         return 0
     if line.total is not None:
         return round_pesos(line.total)

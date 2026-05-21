@@ -1,11 +1,26 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class TicketBranchOfficeServiceLineInput(BaseModel):
-    branch_office_service_id: int = Field(..., gt=0)
+    """branch_office_service_id=0 + additional_service para servicios escritos a mano."""
+
+    branch_office_service_id: int = Field(default=0, ge=0)
+    additional_service: str | None = Field(default=None, max_length=255)
     total: int = Field(..., ge=0)
+
+    @model_validator(mode="after")
+    def validate_line(self) -> "TicketBranchOfficeServiceLineInput":
+        name = (self.additional_service or "").strip()
+        if self.branch_office_service_id == 0:
+            if not name:
+                raise ValueError("Indique el nombre del servicio adicional")
+        elif name:
+            raise ValueError(
+                "additional_service solo aplica cuando branch_office_service_id es 0",
+            )
+        return self
 
 
 class TicketCreate(BaseModel):
@@ -70,6 +85,7 @@ class TicketServiceLine(BaseModel):
     service_id: str
     service_name: str
     price: int
+    additional_service: str | None = None
     washer_id: str | None = None
     added_date: str | None = None
 

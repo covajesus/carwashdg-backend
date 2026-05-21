@@ -86,15 +86,18 @@ class TicketService:
     def _branch_id_for_ticket(self, ticket_id: int) -> str:
         from app.models.ticket_branch_office_service import TicketBranchOfficeService
 
-        line = self.db.scalars(
+        stmt = (
             select(TicketBranchOfficeService)
             .where(
                 TicketBranchOfficeService.ticket_id == ticket_id,
                 TicketBranchOfficeService.deleted_date.is_(None),
+                TicketBranchOfficeService.branch_office_service_id.isnot(None),
+                TicketBranchOfficeService.branch_office_service_id > 0,
             )
-            .limit(1),
-        ).first()
-        if line is None or line.branch_office_service_id is None:
+            .limit(1)
+        )
+        line = self.db.scalars(stmt).first()
+        if line is None:
             return ""
         bos = self.db.get(BranchOfficeService, line.branch_office_service_id)
         return str(bos.branch_office_id) if bos and bos.branch_office_id else ""
@@ -202,9 +205,12 @@ class TicketService:
         )
 
         service_lines = [
-            (line.branch_office_service_id, line.total)
+            (
+                line.branch_office_service_id,
+                line.total,
+                (line.additional_service or "").strip() or None,
+            )
             for line in data.branch_office_service_lines
-            if line.branch_office_service_id > 0
         ]
         service_ids = [sid for sid in data.branch_office_service_ids if sid > 0]
 
