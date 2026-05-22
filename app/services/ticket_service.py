@@ -1,3 +1,4 @@
+from collections import defaultdict
 from datetime import datetime
 
 from sqlalchemy import select
@@ -11,9 +12,12 @@ from app.models.customer import Customer
 from app.models.status import Status
 from app.models.ticket import Ticket
 from app.schemas.ticket import (
+    TicketCheckout,
+    BranchEarningsItem,
     TicketCreate,
     TicketCreateResponse,
     TicketDetailResponse,
+    TicketEarningsByBranchResponse,
     TicketListItem,
     TicketPublic,
     TicketSummaryResponse,
@@ -178,6 +182,11 @@ class TicketService:
         return row
 
     def _branch_id_for_ticket(self, ticket_id: int) -> str:
+        branch_id = self._resolve_branch_office_id_for_ticket(ticket_id)
+        return str(branch_id) if branch_id is not None else ""
+
+    def _resolve_branch_office_id_for_ticket(self, ticket_id: int) -> int | None:
+        from app.models.branch_office_washer import BranchOfficeWasher
         from app.models.ticket_branch_office_service import TicketBranchOfficeService
 
         stmt = (
@@ -191,10 +200,29 @@ class TicketService:
             .limit(1)
         )
         line = self.db.scalars(stmt).first()
-        if line is None:
-            return ""
-        bos = self.db.get(BranchOfficeService, line.branch_office_service_id)
-        return str(bos.branch_office_id) if bos and bos.branch_office_id else ""
+        if line is not None and line.branch_office_service_id:
+            bos = self.db.get(BranchOfficeService, line.branch_office_service_id)
+            if bos and bos.branch_office_id:
+                return int(bos.branch_office_id)
+
+        washer_branch = self.db.scalars(
+            select(BranchOfficeWasher.branch_office_id)
+            .join(
+                TicketBranchOfficeService,
+                TicketBranchOfficeService.washer_id == BranchOfficeWasher.washer_id,
+            )
+            .where(
+                TicketBranchOfficeService.ticket_id == ticket_id,
+                TicketBranchOfficeService.deleted_date.is_(None),
+                TicketBranchOfficeService.washer_id.isnot(None),
+                BranchOfficeWasher.deleted_date.is_(None),
+                BranchOfficeWasher.branch_office_id.isnot(None),
+            )
+            .limit(1),
+        ).first()
+        if washer_branch is not None:
+            return int(washer_branch)
+        return None
 
     def _branch_name(self, ticket_id: int) -> str:
         branch_id = self._branch_id_for_ticket(ticket_id)
@@ -257,6 +285,9 @@ class TicketService:
             status=self._status_text(row.status_id),
             createdAt=created,
             customer_name=self._customer_name(row),
+            paymentTypeId=(
+                str(row.payment_type_id) if row.payment_type_id else None
+            ),
         )
 
     def list_for_user(self, user: UserPublic) -> list[TicketListItem]:
@@ -268,6 +299,83 @@ class TicketService:
         return TicketSummaryResponse(
             totalEarnings=sum(item.total for item in items),
             ticketCount=len(items),
+        )
+
+    def earnings_by_branch(
+        self,
+        user: UserPublic,
+        *,
+        branch_office_id: int | None = None,
+    ) -> TicketEarningsByBranchResponse:
+        scope = self._branch_scope_for_user(user)
+        if scope == 0:
+            return TicketEarningsByBranchResponse(
+                items=[],
+                subtotal=0,
+                iva=0,
+                total=0,
+                ticket_count=0,
+            )
+
+        filter_branch_id: int | None
+        if scope is not None:
+            filter_branch_id = scope
+        else:
+            filter_branch_id = branch_office_id
+
+        if filter_branch_id is not None:
+            branch = self.db.get(BranchOffice, filter_branch_id)
+            if branch is None or not branch.is_active:
+                raise TicketValidationError("La sucursal no existe")
+
+        buckets: dict[int, dict[str, int]] = defaultdict(
+            lambda: {"ticket_count": 0, "subtotal": 0, "iva": 0, "total": 0},
+        )
+
+        stmt = self._list_stmt_for_user(user)
+        for row in self.db.scalars(stmt).all():
+            if row.id is None:
+                continue
+            resolved_branch = self._resolve_branch_office_id_for_ticket(row.id)
+            bucket_key = resolved_branch if resolved_branch is not None else 0
+            if filter_branch_id is not None and bucket_key != filter_branch_id:
+                continue
+
+            pricing = self._ticket_pricing(row.id, row)
+            bucket = buckets[bucket_key]
+            bucket["ticket_count"] += 1
+            bucket["subtotal"] += pricing["subtotal"]
+            bucket["iva"] += pricing["iva"]
+            bucket["total"] += pricing["total"]
+
+        items: list[BranchEarningsItem] = []
+        for branch_key, totals in buckets.items():
+            if branch_key == 0:
+                branch_name = "Sin sucursal"
+                branch_id_str = "0"
+            else:
+                branch_row = self.db.get(BranchOffice, branch_key)
+                branch_name = branch_row.branch_office if branch_row else f"Sucursal #{branch_key}"
+                branch_id_str = str(branch_key)
+            items.append(
+                BranchEarningsItem(
+                    branch_office_id=branch_id_str,
+                    branch_name=branch_name,
+                    ticket_count=totals["ticket_count"],
+                    subtotal=totals["subtotal"],
+                    iva=totals["iva"],
+                    total=totals["total"],
+                ),
+            )
+
+        items.sort(key=lambda row: row.branch_name.lower())
+
+        return TicketEarningsByBranchResponse(
+            items=items,
+            subtotal=sum(row.subtotal for row in items),
+            iva=sum(row.iva for row in items),
+            total=sum(row.total for row in items),
+            ticket_count=sum(row.ticket_count for row in items),
         )
 
     def get_detail(self, ticket_id: int, user: UserPublic) -> TicketDetailResponse:
@@ -290,9 +398,7 @@ class TicketService:
         return self.to_public(row)
 
     def create(self, data: TicketCreate) -> TicketCreateResponse:
-        if data.payment_type_id not in (PAYMENT_TYPE_EFECTIVO, PAYMENT_TYPE_TRANSBANK):
-            raise TicketValidationError("Seleccione el método de pago")
-
+        """Crear ticket sin cobro: el pago se confirma después (checkout / PayTicket)."""
         active_raffle = self._raffles.get_current_active_raffle()
         if active_raffle is not None and not data.customer_id:
             raise TicketValidationError(
@@ -305,7 +411,7 @@ class TicketService:
             car_type_id=data.car_type_id,
             license_plate_id=(data.license_plate_id or "").strip() or None,
             photo_url=(data.photo_url or "").strip() or None,
-            payment_type_id=data.payment_type_id,
+            payment_type_id=None,
             status_id=data.status_id,
             tip=(data.tip or "").strip() or None,
             added_date=now,
@@ -360,24 +466,11 @@ class TicketService:
                 row.tax = str(round_pesos(data.tax or 0))
                 row.total = str(round_pesos(data.total))
 
-            raffle_assignment = None
-            if active_raffle is not None and data.customer_id:
-                try:
-                    raffle_assignment = self._raffles.assign_number_for_customer(
-                        active_raffle.id,
-                        data.customer_id,
-                        ticket_id=row.id,
-                        commit=False,
-                    )
-                except RaffleValidationError as exc:
-                    self.db.rollback()
-                    raise TicketValidationError(str(exc)) from exc
-
             self.db.commit()
             self.db.refresh(row)
             return TicketCreateResponse(
                 item=self.to_public(row),
-                raffle=raffle_assignment,
+                raffle=None,
             )
         except TicketLineValidationError as exc:
             self.db.rollback()
@@ -385,6 +478,55 @@ class TicketService:
         except TicketValidationError:
             self.db.rollback()
             raise
+        except Exception:
+            self.db.rollback()
+            raise
+
+    def checkout(
+        self,
+        ticket_id: int,
+        data: TicketCheckout,
+        user: UserPublic,
+    ) -> TicketCreateResponse:
+        if data.payment_type_id not in (PAYMENT_TYPE_EFECTIVO, PAYMENT_TYPE_TRANSBANK):
+            raise TicketValidationError("Seleccione el método de pago")
+
+        row = self._get_visible_ticket(ticket_id, user)
+        if row.payment_type_id in (PAYMENT_TYPE_EFECTIVO, PAYMENT_TYPE_TRANSBANK):
+            raise TicketValidationError("Este ticket ya fue cobrado")
+
+        active_raffle = self._raffles.get_current_active_raffle()
+        if active_raffle is not None and not row.customer_id:
+            raise TicketValidationError(
+                "Hay una rifa activa: el ticket debe tener un cliente registrado",
+            )
+
+        row.payment_type_id = data.payment_type_id
+        row.subtotal = str(round_pesos(data.subtotal))
+        row.tax = str(round_pesos(data.tax))
+        row.total = str(round_pesos(data.total))
+        row.updated_date = self._now()
+
+        raffle_assignment = None
+        if active_raffle is not None and row.customer_id:
+            try:
+                raffle_assignment = self._raffles.assign_number_for_customer(
+                    active_raffle.id,
+                    row.customer_id,
+                    ticket_id=row.id,
+                    commit=False,
+                )
+            except RaffleValidationError as exc:
+                self.db.rollback()
+                raise TicketValidationError(str(exc)) from exc
+
+        try:
+            self.db.commit()
+            self.db.refresh(row)
+            return TicketCreateResponse(
+                item=self.to_public(row),
+                raffle=raffle_assignment,
+            )
         except Exception:
             self.db.rollback()
             raise

@@ -28,6 +28,15 @@ class BranchOfficeWasherService:
             raise BranchOfficeWasherValidationError(f"{label} es demasiado largo")
         return text
 
+    @staticmethod
+    def _normalize_optional_text(value: str | None, *, label: str) -> str | None:
+        text = (value or "").strip()
+        if not text:
+            return None
+        if len(text) > 255:
+            raise BranchOfficeWasherValidationError(f"{label} es demasiado largo")
+        return text
+
     def _active_filter(self, stmt):
         return stmt.where(BranchOfficeWasher.deleted_date.is_(None))
 
@@ -85,14 +94,14 @@ class BranchOfficeWasherService:
 
         week = self._normalize_required_text(
             week_percentage,
-            label="el valor en la semana",
+            label="el porcentaje por día (lunes a sábado)",
         )
         sunday = self._normalize_required_text(
             sunday_percentage,
-            label="el valor domingo",
+            label="el porcentaje domingo",
         )
-        goal = self._normalize_required_text(daily_goal, label="la meta diaria")
-        goal_pct = self._normalize_required_text(
+        goal = self._normalize_optional_text(daily_goal, label="la meta diaria")
+        goal_pct = self._normalize_optional_text(
             daily_goal_percentage,
             label="el porcentaje de meta diario",
         )
@@ -142,20 +151,20 @@ class BranchOfficeWasherService:
         if week_percentage is not None:
             row.week_percentage = self._normalize_required_text(
                 week_percentage,
-                label="el valor en la semana",
+                label="el porcentaje por día (lunes a sábado)",
             )
         if sunday_percentage is not None:
             row.sunday_percentage = self._normalize_required_text(
                 sunday_percentage,
-                label="el valor domingo",
+                label="el porcentaje domingo",
             )
         if daily_goal is not None:
-            row.daily_goal = self._normalize_required_text(
+            row.daily_goal = self._normalize_optional_text(
                 daily_goal,
                 label="la meta diaria",
             )
         if daily_goal_percentage is not None:
-            row.daily_goal_percentage = self._normalize_required_text(
+            row.daily_goal_percentage = self._normalize_optional_text(
                 daily_goal_percentage,
                 label="el porcentaje de meta diario",
             )

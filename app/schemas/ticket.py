@@ -54,6 +54,14 @@ class TicketUpdate(BaseModel):
     tip: str | None = Field(default=None, max_length=255)
 
 
+class TicketCheckout(BaseModel):
+    payment_type_id: int = Field(..., ge=1, le=2)
+    needs_tax_receipt: bool | None = None
+    subtotal: int = Field(..., ge=0)
+    tax: int = Field(..., ge=0)
+    total: int = Field(..., gt=0)
+
+
 class TicketPublic(BaseModel):
     id: str
     customer_id: str | None = None
@@ -78,6 +86,7 @@ class TicketListItem(BaseModel):
     status: str
     createdAt: str
     customer_name: str
+    paymentTypeId: str | None = None
 
 
 class TicketServiceLine(BaseModel):
@@ -101,6 +110,23 @@ class TicketSummaryResponse(BaseModel):
 
     totalEarnings: int = Field(ge=0)
     ticketCount: int = Field(ge=0)
+
+
+class BranchEarningsItem(BaseModel):
+    branch_office_id: str
+    branch_name: str
+    ticket_count: int = Field(ge=0)
+    subtotal: int = Field(ge=0)
+    iva: int = Field(ge=0)
+    total: int = Field(ge=0)
+
+
+class TicketEarningsByBranchResponse(BaseModel):
+    items: list[BranchEarningsItem]
+    subtotal: int = Field(ge=0)
+    iva: int = Field(ge=0)
+    total: int = Field(ge=0)
+    ticket_count: int = Field(ge=0)
 
 
 class TicketDetailResponse(BaseModel):

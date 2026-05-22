@@ -1,12 +1,14 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 
 from app.api.deps import CurrentUserDep, TicketServiceDep
 from app.schemas.ticket import (
     ErrorResponse,
+    TicketCheckout,
     TicketCreate,
     TicketCreateResponse,
     TicketDeleteResponse,
     TicketDetailResponse,
+    TicketEarningsByBranchResponse,
     TicketItemResponse,
     TicketListResponse,
     TicketSummaryResponse,
@@ -33,6 +35,25 @@ def tickets_summary(
     return service.summary_for_user(current_user)
 
 
+@router.get(
+    "/earnings-by-branch",
+    response_model=TicketEarningsByBranchResponse,
+    responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}},
+)
+def earnings_by_branch(
+    service: TicketServiceDep,
+    current_user: CurrentUserDep,
+    branch_office_id: int | None = Query(default=None, ge=1),
+) -> TicketEarningsByBranchResponse:
+    try:
+        return service.earnings_by_branch(
+            current_user,
+            branch_office_id=branch_office_id,
+        )
+    except TicketValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("", response_model=TicketCreateResponse, status_code=status.HTTP_201_CREATED)
 def create_ticket(
     body: TicketCreate,
@@ -55,6 +76,25 @@ def get_ticket(
         return service.get_detail(ticket_id, current_user)
     except TicketNotFoundError as exc:
         raise HTTPException(status_code=404, detail="No encontrado") from exc
+
+
+@router.post(
+    "/{ticket_id}/checkout",
+    response_model=TicketCreateResponse,
+    responses={400: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+)
+def checkout_ticket(
+    ticket_id: int,
+    body: TicketCheckout,
+    service: TicketServiceDep,
+    current_user: CurrentUserDep,
+) -> TicketCreateResponse:
+    try:
+        return service.checkout(ticket_id, body, current_user)
+    except TicketNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="No encontrado") from exc
+    except TicketValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.patch("/{ticket_id}", response_model=TicketItemResponse, responses={404: {"model": ErrorResponse}})
