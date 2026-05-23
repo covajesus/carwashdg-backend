@@ -13,7 +13,9 @@ from app.models.slider import Slider
 from app.models.status import Status
 from app.models.ticket import Ticket
 from app.models.ticket_branch_office_service import TicketBranchOfficeService
+from app.models.expense import Expense
 from app.models.user import User
+from app.models.washer_pay_settlement import WasherPaySettlement
 
 __all__ = [
     "Brand",
@@ -25,6 +27,7 @@ __all__ = [
     "CarType",
     "Configuration",
     "Customer",
+    "Expense",
     "Rol",
     "Service",
     "Slider",
@@ -32,4 +35,5 @@ __all__ = [
     "Ticket",
     "TicketBranchOfficeService",
     "User",
+    "WasherPaySettlement",
 ]

@@ -129,6 +129,26 @@ class TicketEarningsByBranchResponse(BaseModel):
     ticket_count: int = Field(ge=0)
 
 
+class BranchEarningsByDateItem(BaseModel):
+    """Totales de tickets de una sucursal agrupados por día (fecha de alta)."""
+
+    date: str
+    ticket_count: int = Field(ge=0)
+    subtotal: int = Field(ge=0)
+    iva: int = Field(ge=0)
+    total: int = Field(ge=0)
+
+
+class TicketEarningsByBranchDateResponse(BaseModel):
+    branch_office_id: str
+    branch_name: str
+    items: list[BranchEarningsByDateItem]
+    subtotal: int = Field(ge=0)
+    iva: int = Field(ge=0)
+    total: int = Field(ge=0)
+    ticket_count: int = Field(ge=0)
+
+
 class TicketDetailResponse(BaseModel):
     ticket: TicketListItem
     customer_name: str

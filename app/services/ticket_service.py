@@ -13,10 +13,12 @@ from app.models.status import Status
 from app.models.ticket import Ticket
 from app.schemas.ticket import (
     TicketCheckout,
+    BranchEarningsByDateItem,
     BranchEarningsItem,
     TicketCreate,
     TicketCreateResponse,
     TicketDetailResponse,
+    TicketEarningsByBranchDateResponse,
     TicketEarningsByBranchResponse,
     TicketListItem,
     TicketPublic,
@@ -376,6 +378,76 @@ class TicketService:
             iva=sum(row.iva for row in items),
             total=sum(row.total for row in items),
             ticket_count=sum(row.ticket_count for row in items),
+        )
+
+    def earnings_by_branch_by_date(
+        self,
+        user: UserPublic,
+        *,
+        branch_office_id: int,
+    ) -> TicketEarningsByBranchDateResponse:
+        scope = self._branch_scope_for_user(user)
+        if scope == 0:
+            raise TicketValidationError("No tiene sucursal asignada")
+
+        if scope is not None and scope != branch_office_id:
+            raise TicketValidationError("No puede consultar otra sucursal")
+
+        if branch_office_id == 0:
+            branch_name = "Sin sucursal"
+        else:
+            branch = self.db.get(BranchOffice, branch_office_id)
+            if branch is None or not branch.is_active:
+                raise TicketValidationError("La sucursal no existe")
+            branch_name = branch.branch_office
+
+        buckets: dict[str, dict[str, int]] = defaultdict(
+            lambda: {"ticket_count": 0, "subtotal": 0, "iva": 0, "total": 0},
+        )
+
+        stmt = self._list_stmt_for_user(user)
+        for row in self.db.scalars(stmt).all():
+            if row.id is None:
+                continue
+            resolved_branch = self._resolve_branch_office_id_for_ticket(row.id)
+            bucket_key = resolved_branch if resolved_branch is not None else 0
+            if bucket_key != branch_office_id:
+                continue
+
+            if row.added_date is not None:
+                day_key = row.added_date.date().isoformat()
+            else:
+                day_key = "sin-fecha"
+
+            pricing = self._ticket_pricing(row.id, row)
+            bucket = buckets[day_key]
+            bucket["ticket_count"] += 1
+            bucket["subtotal"] += pricing["subtotal"]
+            bucket["iva"] += pricing["iva"]
+            bucket["total"] += pricing["total"]
+
+        date_items: list[BranchEarningsByDateItem] = []
+        for day_key, totals in buckets.items():
+            date_items.append(
+                BranchEarningsByDateItem(
+                    date=day_key,
+                    ticket_count=totals["ticket_count"],
+                    subtotal=totals["subtotal"],
+                    iva=totals["iva"],
+                    total=totals["total"],
+                ),
+            )
+
+        date_items.sort(key=lambda row: row.date, reverse=True)
+
+        return TicketEarningsByBranchDateResponse(
+            branch_office_id=str(branch_office_id),
+            branch_name=branch_name,
+            items=date_items,
+            subtotal=sum(row.subtotal for row in date_items),
+            iva=sum(row.iva for row in date_items),
+            total=sum(row.total for row in date_items),
+            ticket_count=sum(row.ticket_count for row in date_items),
         )
 
     def get_detail(self, ticket_id: int, user: UserPublic) -> TicketDetailResponse:

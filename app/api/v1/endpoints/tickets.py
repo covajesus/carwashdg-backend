@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, status
 
 from app.api.deps import CurrentUserDep, TicketServiceDep
 from app.schemas.ticket import (
@@ -8,6 +8,7 @@ from app.schemas.ticket import (
     TicketCreateResponse,
     TicketDeleteResponse,
     TicketDetailResponse,
+    TicketEarningsByBranchDateResponse,
     TicketEarningsByBranchResponse,
     TicketItemResponse,
     TicketListResponse,
@@ -43,10 +44,44 @@ def tickets_summary(
 def earnings_by_branch(
     service: TicketServiceDep,
     current_user: CurrentUserDep,
-    branch_office_id: int | None = Query(default=None, ge=1),
+) -> TicketEarningsByBranchResponse:
+    try:
+        return service.earnings_by_branch(current_user, branch_office_id=None)
+    except TicketValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get(
+    "/earnings-by-branch/branch/{branch_office_id}",
+    response_model=TicketEarningsByBranchResponse,
+    responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}},
+)
+def earnings_by_branch_for_office(
+    branch_office_id: int,
+    service: TicketServiceDep,
+    current_user: CurrentUserDep,
 ) -> TicketEarningsByBranchResponse:
     try:
         return service.earnings_by_branch(
+            current_user,
+            branch_office_id=branch_office_id,
+        )
+    except TicketValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get(
+    "/earnings-by-branch/branch/{branch_office_id}/by-date",
+    response_model=TicketEarningsByBranchDateResponse,
+    responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}},
+)
+def earnings_by_branch_by_date(
+    branch_office_id: int,
+    service: TicketServiceDep,
+    current_user: CurrentUserDep,
+) -> TicketEarningsByBranchDateResponse:
+    try:
+        return service.earnings_by_branch_by_date(
             current_user,
             branch_office_id=branch_office_id,
         )

@@ -9,6 +9,7 @@ from app.api.v1.endpoints import (
     car_types,
     configurations,
     customers,
+    expenses,
     health,
     raffles,
     roles,
@@ -19,6 +20,7 @@ from app.api.v1.endpoints import (
     ticket_lines,
     tickets,
     users,
+    washer_pay,
 )
 
 api_router = APIRouter()
@@ -35,8 +37,10 @@ api_router.include_router(clients.router)
 api_router.include_router(settings.router)
 api_router.include_router(configurations.router)
 api_router.include_router(customers.router)
+api_router.include_router(expenses.router)
 api_router.include_router(services.router)
 api_router.include_router(branch_office_services.router)
 api_router.include_router(roles.router)
 api_router.include_router(tickets.router)
 api_router.include_router(ticket_lines.router)
+api_router.include_router(washer_pay.router)

@@ -16,12 +16,14 @@ from app.services.car_type_service import CarTypeService
 from app.services.catalog_service import CatalogService
 from app.services.configuration_service import ConfigurationService
 from app.services.customer_service import CustomerService
+from app.services.expense_service import ExpenseService
 from app.services.raffle_service import RaffleService
 from app.services.rol_service import RolService
 from app.services.slider_service import SliderService
 from app.services.status_service import StatusService
 from app.services.ticket_line_service import TicketLineService
 from app.services.ticket_service import TicketService
+from app.services.washer_pay_service import WasherPayService
 
 DbSession = Annotated[Session, Depends(get_db)]
 
@@ -82,6 +84,14 @@ def get_ticket_line_service(db: DbSession) -> TicketLineService:
     return TicketLineService(db)
 
 
+def get_washer_pay_service(db: DbSession) -> WasherPayService:
+    return WasherPayService(db)
+
+
+def get_expense_service(db: DbSession) -> ExpenseService:
+    return ExpenseService(db)
+
+
 def get_user_service(db: DbSession) -> UserService:
     return UserService(db)
 
@@ -137,5 +147,7 @@ RaffleServiceDep = Annotated[RaffleService, Depends(get_raffle_service)]
 RolServiceDep = Annotated[RolService, Depends(get_rol_service)]
 TicketServiceDep = Annotated[TicketService, Depends(get_ticket_service)]
 TicketLineServiceDep = Annotated[TicketLineService, Depends(get_ticket_line_service)]
+WasherPayServiceDep = Annotated[WasherPayService, Depends(get_washer_pay_service)]
+ExpenseServiceDep = Annotated[ExpenseService, Depends(get_expense_service)]
 UserServiceDep = Annotated[UserService, Depends(get_user_service)]
 CurrentUserDep = Annotated[UserPublic, Depends(get_current_user)]

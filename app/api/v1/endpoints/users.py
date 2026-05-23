@@ -22,7 +22,7 @@ def list_users(
     return UserListResponse(items=service.list_all())
 
 
-@router.get("/rol/{rol_id}", response_model=UserListResponse)
+@router.get("/role/{rol_id}", response_model=UserListResponse)
 def list_users_by_rol(
     rol_id: int,
     _current_user: CurrentUserDep,

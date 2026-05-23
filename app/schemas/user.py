@@ -39,6 +39,7 @@ class UserPublic(BaseModel):
     fullName: str
     email: str
     role: UserRole
+    roleLabel: str
     branchOfficeId: int | None = Field(default=None, ge=1)
     weekPercentage: str | None = None
     sundayPercentage: str | None = None

@@ -12,6 +12,7 @@ from app.core.user_status import (
     active_from_status_id,
     status_id_from_active,
 )
+from app.models.rol import Rol
 from app.models.status import Status
 from app.models.user import User
 from app.schemas.user import UserCreate, UserPublic, UserRole, UserUpdate
@@ -53,7 +54,11 @@ class UserService:
     def normalize_email(email: str) -> str:
         return email.strip().lower()
 
-    def to_public(self, row: User) -> UserPublic:
+    def _rol_labels_by_id(self) -> dict[int, str]:
+        stmt = select(Rol)
+        return {row.id: row.rol for row in self.db.scalars(stmt).all()}
+
+    def to_public(self, row: User, *, rol_label: str | None = None) -> UserPublic:
         branch_office_id: int | None = None
         week_percentage: str | None = None
         sunday_percentage: str | None = None
@@ -72,11 +77,15 @@ class UserService:
                 office_id = self._branch_manager.get_branch_office_id_for_manager(row.id)
                 if office_id is not None:
                     branch_office_id = office_id
+        if rol_label is None:
+            rol_row = self.db.get(Rol, row.rol_id)
+            rol_label = rol_row.rol if rol_row is not None else role_from_id(row.rol_id)
         return UserPublic(
             id=str(row.id),
             fullName=row.full_name,
             email=row.email,
             role=role_from_id(row.rol_id),
+            roleLabel=rol_label,
             branchOfficeId=branch_office_id,
             weekPercentage=week_percentage,
             sundayPercentage=sunday_percentage,
@@ -161,17 +170,22 @@ class UserService:
         return row
 
     def list_all(self) -> list[UserPublic]:
+        rol_labels = self._rol_labels_by_id()
         stmt = self._active_filter(select(User)).order_by(User.full_name)
-        return [self.to_public(row) for row in self.db.scalars(stmt).all()]
+        return [
+            self.to_public(row, rol_label=rol_labels.get(row.rol_id))
+            for row in self.db.scalars(stmt).all()
+        ]
 
     def list_by_rol_id(self, rol_id: int) -> list[UserPublic]:
+        rol_labels = self._rol_labels_by_id()
         stmt = (
             self._active_filter(select(User))
             .where(User.rol_id == rol_id)
             .order_by(User.full_name)
         )
         return [
-            self.to_public(row)
+            self.to_public(row, rol_label=rol_labels.get(row.rol_id))
             for row in self.db.scalars(stmt).all()
             if self._can_authenticate(row)
         ]
@@ -179,6 +193,7 @@ class UserService:
     def list_washers_by_branch_office(self, branch_office_id: int) -> list[UserPublic]:
         if branch_office_id < 1:
             return []
+        rol_labels = self._rol_labels_by_id()
         washer_ids = self._branch_washer.list_washer_ids_for_branch(branch_office_id)
         if not washer_ids:
             return []
@@ -188,7 +203,7 @@ class UserService:
             .order_by(User.full_name)
         )
         return [
-            self.to_public(row)
+            self.to_public(row, rol_label=rol_labels.get(row.rol_id))
             for row in self.db.scalars(stmt).all()
             if self._can_authenticate(row)
         ]
