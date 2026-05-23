@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session
 from app.core.pricing import round_pesos, ticket_totals_from_subtotal
 from app.core.ticket_total import parse_ticket_total, sync_ticket_total
 from app.models.branch_office import BranchOffice
-from app.models.branch_office_service import BranchOfficeService
 from app.models.customer import Customer
 from app.models.status import Status
 from app.models.ticket import Ticket
@@ -111,21 +110,7 @@ class TicketService:
         from app.models.branch_office_washer import BranchOfficeWasher
         from app.models.ticket_branch_office_service import TicketBranchOfficeService
 
-        via_bos = (
-            select(TicketBranchOfficeService.ticket_id)
-            .join(
-                BranchOfficeService,
-                TicketBranchOfficeService.branch_office_service_id == BranchOfficeService.id,
-            )
-            .where(
-                BranchOfficeService.branch_office_id == branch_office_id,
-                TicketBranchOfficeService.deleted_date.is_(None),
-                TicketBranchOfficeService.ticket_id.isnot(None),
-                TicketBranchOfficeService.branch_office_service_id.isnot(None),
-                TicketBranchOfficeService.branch_office_service_id > 0,
-            )
-        )
-        via_washer = (
+        return (
             select(TicketBranchOfficeService.ticket_id)
             .join(
                 BranchOfficeWasher,
@@ -139,7 +124,6 @@ class TicketService:
                 TicketBranchOfficeService.washer_id.isnot(None),
             )
         )
-        return via_bos.union(via_washer)
 
     def _list_stmt_for_user(self, user: UserPublic):
         stmt = self._active_filter(select(Ticket)).order_by(Ticket.added_date.desc())
@@ -190,22 +174,6 @@ class TicketService:
     def _resolve_branch_office_id_for_ticket(self, ticket_id: int) -> int | None:
         from app.models.branch_office_washer import BranchOfficeWasher
         from app.models.ticket_branch_office_service import TicketBranchOfficeService
-
-        stmt = (
-            select(TicketBranchOfficeService)
-            .where(
-                TicketBranchOfficeService.ticket_id == ticket_id,
-                TicketBranchOfficeService.deleted_date.is_(None),
-                TicketBranchOfficeService.branch_office_service_id.isnot(None),
-                TicketBranchOfficeService.branch_office_service_id > 0,
-            )
-            .limit(1)
-        )
-        line = self.db.scalars(stmt).first()
-        if line is not None and line.branch_office_service_id:
-            bos = self.db.get(BranchOfficeService, line.branch_office_service_id)
-            if bos and bos.branch_office_id:
-                return int(bos.branch_office_id)
 
         washer_branch = self.db.scalars(
             select(BranchOfficeWasher.branch_office_id)
@@ -493,13 +461,12 @@ class TicketService:
 
         service_lines = [
             (
-                line.branch_office_service_id,
+                line.service_id,
                 line.total,
                 (line.additional_service or "").strip() or None,
             )
-            for line in data.branch_office_service_lines
+            for line in data.service_lines
         ]
-        service_ids = [sid for sid in data.branch_office_service_ids if sid > 0]
 
         try:
             self.db.add(row)
@@ -513,10 +480,6 @@ class TicketService:
                     ticket_id=row.id,
                     lines=service_lines,
                     washer_id=data.washer_id,
-                )
-            elif service_ids:
-                raise TicketValidationError(
-                    "Indique el monto de cada servicio (branch_office_service_lines)",
                 )
             elif data.washer_id is not None:
                 self._lines.assign_washer_to_ticket(

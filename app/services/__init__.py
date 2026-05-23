@@ -1,7 +1,6 @@
 from app.services.brand_service import BrandService
 from app.services.client_service import ClientService
 from app.services.branch_office_service import BranchOfficeService
-from app.services.branch_office_service_service import BranchOfficeServiceService
 from app.services.car_type_service import CarTypeService
 from app.services.catalog_service import CatalogService
 from app.services.configuration_service import ConfigurationService
@@ -18,7 +17,6 @@ __all__ = [
     "BrandService",
     "ClientService",
     "BranchOfficeService",
-    "BranchOfficeServiceService",
     "CarTypeService",
     "CatalogService",
     "ConfigurationService",

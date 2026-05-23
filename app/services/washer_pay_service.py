@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 
 from app.core.pricing import round_pesos
 from app.models.branch_office import BranchOffice
-from app.models.branch_office_service import BranchOfficeService
 from app.models.service import Service
 from app.models.ticket import Ticket
 from app.models.ticket_branch_office_service import TicketBranchOfficeService
@@ -103,12 +102,10 @@ class WasherPayService:
         additional = (line.additional_service or "").strip()
         if additional:
             return additional
-        if line.branch_office_service_id:
-            bos = self.db.get(BranchOfficeService, line.branch_office_service_id)
-            if bos and bos.service_id:
-                svc = self.db.get(Service, bos.service_id)
-                if svc and (svc.service or "").strip():
-                    return svc.service.strip()
+        if line.service_id:
+            svc = self.db.get(Service, line.service_id)
+            if svc and (svc.service or "").strip():
+                return svc.service.strip()
         return "Servicio"
 
     def _washer_full_name(self, washer_id: int) -> str:

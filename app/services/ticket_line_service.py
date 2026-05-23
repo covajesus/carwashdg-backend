@@ -5,7 +5,6 @@ from sqlalchemy.orm import Session
 
 from app.core.datetime_utils import datetime_to_iso
 from app.core.pricing import round_pesos
-from app.models.branch_office_service import BranchOfficeService
 from app.models.service import Service
 from app.models.ticket_branch_office_service import TicketBranchOfficeService
 from app.schemas.ticket import TicketServiceLine
@@ -44,13 +43,11 @@ class TicketLineService:
         return 0
 
     def to_public(self, row: TicketBranchOfficeService) -> TicketBranchOfficeServicePublic:
-        bos_id = row.branch_office_service_id
+        svc_id = row.service_id
         return TicketBranchOfficeServicePublic(
             id=str(row.id),
             ticket_id=str(row.ticket_id or ""),
-            branch_office_service_id=(
-                str(bos_id) if bos_id is not None else None
-            ),
+            service_id=str(svc_id) if svc_id is not None else None,
             additional_service=(row.additional_service or "").strip() or None,
             washer_id=str(row.washer_id) if row.washer_id is not None else None,
             total=self._resolved_line_total(row),
@@ -86,16 +83,15 @@ class TicketLineService:
 
     def _to_line(self, row: TicketBranchOfficeService) -> TicketServiceLine | None:
         additional = (row.additional_service or "").strip()
-        bos_id = row.branch_office_service_id
+        svc_id = row.service_id
 
-        if bos_id == 0 or (bos_id is None and additional):
+        if svc_id == 0 or (svc_id is None and additional):
             if not additional:
                 return None
             return TicketServiceLine(
                 id=str(row.id),
                 ticket_id=str(row.ticket_id or ""),
-                branch_office_service_id="0",
-                service_id="",
+                service_id="0",
                 service_name=additional,
                 additional_service=additional,
                 price=self._resolved_line_total(row),
@@ -103,20 +99,16 @@ class TicketLineService:
                 added_date=datetime_to_iso(row.added_date),
             )
 
-        if bos_id is None:
+        if svc_id is None:
             return None
 
-        bos = self.db.get(BranchOfficeService, bos_id)
-        if bos is None or not bos.is_active:
-            return None
-        svc = self.db.get(Service, bos.service_id)
-        if svc is None:
+        svc = self.db.get(Service, svc_id)
+        if svc is None or not svc.is_active:
             return None
         return TicketServiceLine(
             id=str(row.id),
             ticket_id=str(row.ticket_id or ""),
-            branch_office_service_id=str(bos_id),
-            service_id=str(bos.service_id or ""),
+            service_id=str(svc_id),
             service_name=svc.service,
             additional_service=None,
             price=self._resolved_line_total(row),
@@ -158,7 +150,8 @@ class TicketLineService:
         placeholder = self.db.scalars(
             self._active_filter(select(TicketBranchOfficeService)).where(
                 TicketBranchOfficeService.ticket_id == ticket_id,
-                TicketBranchOfficeService.branch_office_service_id.is_(None),
+                TicketBranchOfficeService.service_id.is_(None),
+                TicketBranchOfficeService.additional_service.is_(None),
             ),
         ).first()
 
@@ -173,7 +166,7 @@ class TicketLineService:
             self.db.add(
                 TicketBranchOfficeService(
                     ticket_id=ticket_id,
-                    branch_office_service_id=None,
+                    service_id=None,
                     washer_id=resolved,
                     added_date=now,
                     updated_date=ts,
@@ -188,7 +181,6 @@ class TicketLineService:
         self,
         *,
         ticket_id: int,
-        branch_office_service_ids: list[int] | None = None,
         lines: list[tuple[int, int, str | None]] | None = None,
         washer_id: int | None,
     ) -> None:
@@ -198,16 +190,11 @@ class TicketLineService:
 
         items: list[tuple[int, int | None, str | None]] = []
         if lines:
-            items = [(bos_id, line_total, extra) for bos_id, line_total, extra in lines]
-        elif branch_office_service_ids:
-            items = [(bos_id, None, None) for bos_id in branch_office_service_ids]
+            items = [(service_id, line_total, extra) for service_id, line_total, extra in lines]
         if not items:
             return
 
-        now = self._now()
-        ts = self._timestamp_str()
-
-        for bos_id, line_total, additional_name in items:
+        for service_id, line_total, additional_name in items:
             additional = (additional_name or "").strip() or None
             resolved_washer = self._resolve_washer(
                 ticket_id=ticket_id,
@@ -219,7 +206,7 @@ class TicketLineService:
                 )
             stored_total = round_pesos(line_total)
 
-            if bos_id == 0:
+            if service_id == 0:
                 if not additional:
                     raise TicketLineValidationError(
                         "Indique el nombre del servicio adicional",
@@ -227,33 +214,33 @@ class TicketLineService:
                 self.db.add(
                     TicketBranchOfficeService(
                         ticket_id=ticket_id,
-                        branch_office_service_id=0,
+                        service_id=0,
                         additional_service=additional[:255],
                         washer_id=resolved_washer,
                         total=stored_total,
-                        added_date=now,
-                        updated_date=ts,
+                        added_date=self._now(),
+                        updated_date=self._timestamp_str(),
                         deleted_date=None,
                     ),
                 )
                 continue
 
-            if bos_id < 0:
+            if service_id < 0:
                 raise TicketLineValidationError("Servicio no válido")
 
-            bos = self.db.get(BranchOfficeService, bos_id)
-            if bos is None or not bos.is_active:
-                raise TicketLineValidationError("El servicio de sucursal no existe")
+            svc = self.db.get(Service, service_id)
+            if svc is None or not svc.is_active:
+                raise TicketLineValidationError("El servicio no existe")
 
             self.db.add(
                 TicketBranchOfficeService(
                     ticket_id=ticket_id,
-                    branch_office_service_id=bos_id,
+                    service_id=service_id,
                     additional_service=None,
                     washer_id=resolved_washer,
                     total=stored_total,
-                    added_date=now,
-                    updated_date=ts,
+                    added_date=self._now(),
+                    updated_date=self._timestamp_str(),
                     deleted_date=None,
                 ),
             )
@@ -274,12 +261,12 @@ class TicketLineService:
         return self.to_public(row)
 
     def create(self, data: TicketBranchOfficeServiceCreate) -> TicketBranchOfficeServicePublic:
-        if data.branch_office_service_id is None:
-            raise TicketLineValidationError("El servicio de sucursal es obligatorio")
+        if data.service_id is None:
+            raise TicketLineValidationError("El servicio es obligatorio")
 
-        bos = self.db.get(BranchOfficeService, data.branch_office_service_id)
-        if bos is None or not bos.is_active:
-            raise TicketLineValidationError("El servicio de sucursal no existe")
+        svc = self.db.get(Service, data.service_id)
+        if svc is None or not svc.is_active:
+            raise TicketLineValidationError("El servicio no existe")
 
         washer_id = self._resolve_washer(
             ticket_id=data.ticket_id,
@@ -296,7 +283,7 @@ class TicketLineService:
         stored_total = round_pesos(data.total)
         row = TicketBranchOfficeService(
             ticket_id=data.ticket_id,
-            branch_office_service_id=data.branch_office_service_id,
+            service_id=data.service_id,
             washer_id=washer_id,
             total=stored_total,
             added_date=now,
@@ -317,11 +304,11 @@ class TicketLineService:
         if row is None or not row.is_active:
             raise TicketLineNotFoundError()
 
-        if data.branch_office_service_id is not None:
-            bos = self.db.get(BranchOfficeService, data.branch_office_service_id)
-            if bos is None or not bos.is_active:
-                raise TicketLineValidationError("El servicio de sucursal no existe")
-            row.branch_office_service_id = data.branch_office_service_id
+        if data.service_id is not None:
+            svc = self.db.get(Service, data.service_id)
+            if svc is None or not svc.is_active:
+                raise TicketLineValidationError("El servicio no existe")
+            row.service_id = data.service_id
 
         if data.ticket_id is not None:
             row.ticket_id = data.ticket_id

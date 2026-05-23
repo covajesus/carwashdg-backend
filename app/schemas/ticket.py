@@ -5,23 +5,21 @@ from pydantic import BaseModel, Field, model_validator
 from app.schemas.raffle import RaffleAssignmentPublic
 
 
-class TicketBranchOfficeServiceLineInput(BaseModel):
-    """branch_office_service_id=0 + additional_service para servicios escritos a mano."""
+class TicketServiceLineInput(BaseModel):
+    """service_id=0 + additional_service para servicios escritos a mano."""
 
-    branch_office_service_id: int = Field(default=0, ge=0)
+    service_id: int = Field(default=0, ge=0)
     additional_service: str | None = Field(default=None, max_length=255)
     total: int = Field(..., ge=0)
 
     @model_validator(mode="after")
-    def validate_line(self) -> "TicketBranchOfficeServiceLineInput":
+    def validate_line(self) -> "TicketServiceLineInput":
         name = (self.additional_service or "").strip()
-        if self.branch_office_service_id == 0:
+        if self.service_id == 0:
             if not name:
                 raise ValueError("Indique el nombre del servicio adicional")
         elif name:
-            raise ValueError(
-                "additional_service solo aplica cuando branch_office_service_id es 0",
-            )
+            raise ValueError("additional_service solo aplica cuando service_id es 0")
         return self
 
 
@@ -34,10 +32,7 @@ class TicketCreate(BaseModel):
     needs_tax_receipt: bool | None = None
     status_id: int | None = None
     washer_id: int | None = None
-    branch_office_service_ids: list[int] = Field(default_factory=list)
-    branch_office_service_lines: list[TicketBranchOfficeServiceLineInput] = Field(
-        default_factory=list,
-    )
+    service_lines: list[TicketServiceLineInput] = Field(default_factory=list)
     subtotal: int | None = Field(default=None, ge=0)
     tax: int | None = Field(default=None, ge=0)
     total: int | None = Field(default=None, ge=0)
@@ -92,7 +87,6 @@ class TicketListItem(BaseModel):
 class TicketServiceLine(BaseModel):
     id: str
     ticket_id: str
-    branch_office_service_id: str
     service_id: str
     service_name: str
     price: int

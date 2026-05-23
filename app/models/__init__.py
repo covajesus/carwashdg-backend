@@ -1,7 +1,6 @@
 from app.models.brand import Brand
 from app.models.client import Client
 from app.models.branch_office import BranchOffice
-from app.models.branch_office_service import BranchOfficeService
 from app.models.branch_office_manager import BranchOfficeManager
 from app.models.branch_office_washer import BranchOfficeWasher
 from app.models.car_type import CarType
@@ -16,12 +15,12 @@ from app.models.ticket_branch_office_service import TicketBranchOfficeService
 from app.models.expense import Expense
 from app.models.user import User
 from app.models.washer_pay_settlement import WasherPaySettlement
+from app.models.washer_group_member import WasherGroupMember
 
 __all__ = [
     "Brand",
     "Client",
     "BranchOffice",
-    "BranchOfficeService",
     "BranchOfficeManager",
     "BranchOfficeWasher",
     "CarType",
@@ -36,4 +35,5 @@ __all__ = [
     "TicketBranchOfficeService",
     "User",
     "WasherPaySettlement",
+    "WasherGroupMember",
 ]

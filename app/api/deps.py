@@ -11,7 +11,6 @@ from app.services.user_service import UserNotFoundError, UserService
 from app.services.brand_service import BrandService
 from app.services.client_service import ClientService
 from app.services.branch_office_service import BranchOfficeService
-from app.services.branch_office_service_service import BranchOfficeServiceService
 from app.services.car_type_service import CarTypeService
 from app.services.catalog_service import CatalogService
 from app.services.configuration_service import ConfigurationService
@@ -62,10 +61,6 @@ def get_customer_service(db: DbSession) -> CustomerService:
 
 def get_catalog_service(db: DbSession) -> CatalogService:
     return CatalogService(db)
-
-
-def get_branch_office_service_service(db: DbSession) -> BranchOfficeServiceService:
-    return BranchOfficeServiceService(db)
 
 
 def get_raffle_service(db: DbSession) -> RaffleService:
@@ -139,10 +134,6 @@ SliderServiceDep = Annotated[SliderService, Depends(get_slider_service)]
 ConfigurationServiceDep = Annotated[ConfigurationService, Depends(get_configuration_service)]
 CustomerServiceDep = Annotated[CustomerService, Depends(get_customer_service)]
 CatalogServiceDep = Annotated[CatalogService, Depends(get_catalog_service)]
-BranchOfficeServiceServiceDep = Annotated[
-    BranchOfficeServiceService,
-    Depends(get_branch_office_service_service),
-]
 RaffleServiceDep = Annotated[RaffleService, Depends(get_raffle_service)]
 RolServiceDep = Annotated[RolService, Depends(get_rol_service)]
 TicketServiceDep = Annotated[TicketService, Depends(get_ticket_service)]

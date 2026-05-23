@@ -11,7 +11,7 @@ class TicketBranchOfficeService(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     ticket_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    branch_office_service_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    service_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     washer_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     additional_service: Mapped[str | None] = mapped_column(String(255), nullable=True)
     total: Mapped[int | None] = mapped_column(Integer, nullable=True)

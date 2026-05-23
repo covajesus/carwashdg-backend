@@ -2,7 +2,6 @@ from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
     auth,
-    branch_office_services,
     branches,
     brands,
     clients,
@@ -39,7 +38,6 @@ api_router.include_router(configurations.router)
 api_router.include_router(customers.router)
 api_router.include_router(expenses.router)
 api_router.include_router(services.router)
-api_router.include_router(branch_office_services.router)
 api_router.include_router(roles.router)
 api_router.include_router(tickets.router)
 api_router.include_router(ticket_lines.router)

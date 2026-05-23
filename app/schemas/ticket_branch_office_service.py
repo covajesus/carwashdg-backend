@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 
 class TicketBranchOfficeServiceCreate(BaseModel):
     ticket_id: int
-    branch_office_service_id: int | None = None
+    service_id: int | None = None
     additional_service: str | None = Field(default=None, max_length=255)
     washer_id: int | None = None
     total: int | None = Field(default=None, ge=0)
@@ -11,7 +11,7 @@ class TicketBranchOfficeServiceCreate(BaseModel):
 
 class TicketBranchOfficeServiceUpdate(BaseModel):
     ticket_id: int | None = None
-    branch_office_service_id: int | None = None
+    service_id: int | None = None
     additional_service: str | None = Field(default=None, max_length=255)
     washer_id: int | None = None
     total: int | None = Field(default=None, ge=0)
@@ -20,7 +20,7 @@ class TicketBranchOfficeServiceUpdate(BaseModel):
 class TicketBranchOfficeServicePublic(BaseModel):
     id: str
     ticket_id: str
-    branch_office_service_id: str | None = None
+    service_id: str | None = None
     additional_service: str | None = None
     washer_id: str | None = None
     total: int = 0
