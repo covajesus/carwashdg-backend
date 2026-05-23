@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -51,6 +51,7 @@ class ExpenseService:
             expense_type=row.expense_type,
             expense_type_label=self.type_label(row.expense_type),
             amount=int(row.amount or 0),
+            expense_date=row.expense_date,
             photo_url=row.photo_url,
             added_date=row.added_date,
             updated_date=row.updated_date,
@@ -81,7 +82,10 @@ class ExpenseService:
         return text
 
     def list_all(self) -> list[ExpensePublic]:
-        stmt = self._active_filter(select(Expense)).order_by(Expense.added_date.desc())
+        stmt = self._active_filter(select(Expense)).order_by(
+            Expense.expense_date.desc(),
+            Expense.added_date.desc(),
+        )
         return [self.to_public(row) for row in self.db.scalars(stmt).all()]
 
     def get_by_id(self, expense_id: int) -> ExpensePublic:
@@ -99,6 +103,7 @@ class ExpenseService:
         row = Expense(
             expense_type=expense_type,
             amount=int(data.amount),
+            expense_date=data.expense_date,
             photo_url=photo_url,
             added_date=now,
             updated_date=now,
@@ -120,6 +125,8 @@ class ExpenseService:
             if data.amount < 1:
                 raise ExpenseValidationError("Indique un monto mayor a cero")
             row.amount = int(data.amount)
+        if data.expense_date is not None:
+            row.expense_date = data.expense_date
         if data.photo_url is not None:
             row.photo_url = self._normalize_photo(data.photo_url)
 

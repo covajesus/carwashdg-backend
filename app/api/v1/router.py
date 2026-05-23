@@ -4,6 +4,7 @@ from app.api.v1.endpoints import (
     auth,
     branches,
     brands,
+    cash_closure,
     clients,
     car_types,
     configurations,
@@ -36,6 +37,7 @@ api_router.include_router(clients.router)
 api_router.include_router(settings.router)
 api_router.include_router(configurations.router)
 api_router.include_router(customers.router)
+api_router.include_router(cash_closure.router)
 api_router.include_router(expenses.router)
 api_router.include_router(services.router)
 api_router.include_router(roles.router)

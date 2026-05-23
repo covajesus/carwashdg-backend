@@ -22,6 +22,7 @@ from app.services.slider_service import SliderService
 from app.services.status_service import StatusService
 from app.services.ticket_line_service import TicketLineService
 from app.services.ticket_service import TicketService
+from app.services.cash_closure_service import CashClosureService
 from app.services.washer_pay_service import WasherPayService
 
 DbSession = Annotated[Session, Depends(get_db)]
@@ -87,6 +88,10 @@ def get_expense_service(db: DbSession) -> ExpenseService:
     return ExpenseService(db)
 
 
+def get_cash_closure_service(db: DbSession) -> CashClosureService:
+    return CashClosureService(db)
+
+
 def get_user_service(db: DbSession) -> UserService:
     return UserService(db)
 
@@ -140,5 +145,6 @@ TicketServiceDep = Annotated[TicketService, Depends(get_ticket_service)]
 TicketLineServiceDep = Annotated[TicketLineService, Depends(get_ticket_line_service)]
 WasherPayServiceDep = Annotated[WasherPayService, Depends(get_washer_pay_service)]
 ExpenseServiceDep = Annotated[ExpenseService, Depends(get_expense_service)]
+CashClosureServiceDep = Annotated[CashClosureService, Depends(get_cash_closure_service)]
 UserServiceDep = Annotated[UserService, Depends(get_user_service)]
 CurrentUserDep = Annotated[UserPublic, Depends(get_current_user)]

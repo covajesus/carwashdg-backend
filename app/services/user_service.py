@@ -24,10 +24,6 @@ from app.services.branch_office_washer_service import (
     BranchOfficeWasherService,
     BranchOfficeWasherValidationError,
 )
-from app.services.washer_group_member_service import (
-    WasherGroupMemberService,
-    WasherGroupMemberValidationError,
-)
 
 _EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
@@ -49,7 +45,6 @@ class UserService:
         self.db = db
         self._branch_washer = BranchOfficeWasherService(db)
         self._branch_manager = BranchOfficeManagerService(db)
-        self._group_members = WasherGroupMemberService(db)
 
     @staticmethod
     def _now() -> datetime:
@@ -85,9 +80,6 @@ class UserService:
         if rol_label is None:
             rol_row = self.db.get(Rol, row.rol_id)
             rol_label = rol_row.rol if rol_row is not None else role_from_id(row.rol_id)
-        group_member_names: list[str] = []
-        if row.id and row.rol_id == WASHER_ROL_ID:
-            group_member_names = self._group_members.list_names_for_washer(row.id)
         return UserPublic(
             id=str(row.id),
             fullName=row.full_name,
@@ -101,8 +93,6 @@ class UserService:
             dailyGoalPercentage=daily_goal_percentage,
             statusId=str(row.status_id) if row.status_id is not None else None,
             active=active_from_status_id(row.status_id),
-            isGroupWasher=len(group_member_names) >= 2,
-            groupMemberNames=group_member_names,
         )
 
     @staticmethod
@@ -231,16 +221,9 @@ class UserService:
         return row
 
     def create(self, data: UserCreate) -> UserPublic:
-        if data.role == "washer" and data.isGroupWasher:
-            names = self._group_members.normalize_names(data.groupMemberNames)
-            if len(names) < 2:
-                raise UserValidationError("Indique al menos 2 nombres para el lavador grupal")
-            full_name = self._group_members.format_display_name(names)
-        else:
-            full_name = data.fullName.strip()
-            if not full_name:
-                raise UserValidationError("El nombre completo es obligatorio")
-            names = []
+        full_name = data.fullName.strip()
+        if not full_name:
+            raise UserValidationError("El nombre completo es obligatorio")
 
         if data.role == "washer":
             raw_email = str(data.email).strip() if data.email else ""
@@ -289,10 +272,6 @@ class UserService:
                     daily_goal_percentage=data.dailyGoalPercentage,
                     commit=False,
                 )
-                if data.isGroupWasher:
-                    self._group_members.replace_members(row.id, names, commit=False)
-                else:
-                    self._group_members.soft_delete_for_washer(row.id, commit=False)
             elif rol_id == MANAGER_ROL_ID:
                 branch_office_id = self._parse_branch_office_id(data.branchOfficeId)
                 if branch_office_id is None:
@@ -309,9 +288,6 @@ class UserService:
         except (BranchOfficeWasherValidationError, BranchOfficeManagerValidationError) as exc:
             self.db.rollback()
             raise UserValidationError(str(exc)) from exc
-        except WasherGroupMemberValidationError as exc:
-            self.db.rollback()
-            raise UserValidationError(str(exc)) from exc
         except Exception:
             self.db.rollback()
             raise
@@ -321,7 +297,7 @@ class UserService:
         if row is None:
             raise UserNotFoundError()
 
-        if data.fullName is not None and data.isGroupWasher is not True:
+        if data.fullName is not None:
             name = data.fullName.strip()
             if not name:
                 raise UserValidationError("El nombre completo no puede quedar vacío")
@@ -396,39 +372,14 @@ class UserService:
             elif data.role is not None:
                 if new_rol_id != WASHER_ROL_ID:
                     self._branch_washer.soft_delete_for_washer(user_id, commit=False)
-                    self._group_members.soft_delete_for_washer(user_id, commit=False)
                 if new_rol_id != MANAGER_ROL_ID:
                     self._branch_manager.soft_delete_for_manager(user_id, commit=False)
-
-            if new_rol_id == WASHER_ROL_ID:
-                if data.isGroupWasher is True:
-                    raw_names = data.groupMemberNames or []
-                    names = self._group_members.replace_members(
-                        user_id,
-                        raw_names,
-                        commit=False,
-                    )
-                    row.full_name = self._group_members.format_display_name(names)
-                elif data.isGroupWasher is False:
-                    self._group_members.soft_delete_for_washer(user_id, commit=False)
-                elif data.groupMemberNames is not None:
-                    names = self._group_members.replace_members(
-                        user_id,
-                        data.groupMemberNames,
-                        commit=False,
-                    )
-                    row.full_name = self._group_members.format_display_name(names)
-            elif data.isGroupWasher is False or data.role is not None:
-                self._group_members.soft_delete_for_washer(user_id, commit=False)
 
             row.updated_date = self._now()
             self.db.commit()
             self.db.refresh(row)
             return self.to_public(row)
         except (BranchOfficeWasherValidationError, BranchOfficeManagerValidationError) as exc:
-            self.db.rollback()
-            raise UserValidationError(str(exc)) from exc
-        except WasherGroupMemberValidationError as exc:
             self.db.rollback()
             raise UserValidationError(str(exc)) from exc
         except Exception:
@@ -442,7 +393,6 @@ class UserService:
         now = self._now()
         self._branch_washer.soft_delete_for_washer(user_id, commit=False)
         self._branch_manager.soft_delete_for_manager(user_id, commit=False)
-        self._group_members.soft_delete_for_washer(user_id, commit=False)
         row.deleted_date = now
         row.updated_date = now
         self.db.commit()
