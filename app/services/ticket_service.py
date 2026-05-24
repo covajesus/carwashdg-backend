@@ -39,7 +39,7 @@ class TicketValidationError(Exception):
 
 PAYMENT_TYPE_EFECTIVO = 1
 PAYMENT_TYPE_TRANSBANK = 2
-TICKET_STATUS_NO_PAGADO_ID = 3
+TICKET_STATUS_NOT_PAID_ID = 3
 
 
 class TicketService:
@@ -123,7 +123,7 @@ class TicketService:
         """Cuenta comisión si el ticket fue cobrado o tiene estatus cerrado/pagado."""
         if row.payment_type_id in (PAYMENT_TYPE_EFECTIVO, PAYMENT_TYPE_TRANSBANK):
             return True
-        if row.status_id == TICKET_STATUS_NO_PAGADO_ID:
+        if row.status_id == TICKET_STATUS_NOT_PAID_ID:
             return False
         status_text = self._status_text(row.status_id).strip().lower()
         if any(x in status_text for x in ("no pagado", "no pagó", "no pago", "cancel")):
