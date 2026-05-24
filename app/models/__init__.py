@@ -15,6 +15,7 @@ from app.models.ticket_branch_office_service import TicketBranchOfficeService
 from app.models.expense import Expense
 from app.models.manager_cash_closure import ManagerCashClosure
 from app.models.user import User
+from app.models.washer_daily_group import WasherDailyGroup, WasherDailyGroupMember
 from app.models.washer_pay_settlement import WasherPaySettlement
 
 __all__ = [
@@ -35,5 +36,7 @@ __all__ = [
     "TicketBranchOfficeService",
     "ManagerCashClosure",
     "User",
+    "WasherDailyGroup",
+    "WasherDailyGroupMember",
     "WasherPaySettlement",
 ]

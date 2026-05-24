@@ -137,13 +137,18 @@ class TicketLineService:
         ticket_id: int,
         washer_id: int | None,
         *,
+        washer_daily_group_id: int | None = None,
         commit: bool = True,
     ) -> None:
-        """Asigna lavador al ticket (línea placeholder o actualización de líneas existentes)."""
+        """Asigna lavador o grupo al ticket (línea placeholder o actualización de líneas existentes)."""
         if ticket_id <= 0:
             raise TicketLineValidationError("El ticket no es válido")
+        if washer_id is not None and washer_daily_group_id is not None:
+            raise TicketLineValidationError("Seleccione un lavador o un grupo, no ambos")
 
-        resolved = self._resolve_washer(ticket_id=ticket_id, washer_id=washer_id)
+        resolved: int | None = None
+        if washer_daily_group_id is None:
+            resolved = self._resolve_washer(ticket_id=ticket_id, washer_id=washer_id)
         now = self._now()
         ts = self._timestamp_str()
 
@@ -155,12 +160,13 @@ class TicketLineService:
             ),
         ).first()
 
-        if resolved is None:
+        if resolved is None and washer_daily_group_id is None:
             if placeholder is not None:
                 placeholder.deleted_date = now
                 placeholder.updated_date = ts
         elif placeholder is not None:
             placeholder.washer_id = resolved
+            placeholder.washer_daily_group_id = washer_daily_group_id
             placeholder.updated_date = ts
         else:
             self.db.add(
@@ -168,6 +174,7 @@ class TicketLineService:
                     ticket_id=ticket_id,
                     service_id=None,
                     washer_id=resolved,
+                    washer_daily_group_id=washer_daily_group_id,
                     added_date=now,
                     updated_date=ts,
                     deleted_date=None,
@@ -183,10 +190,13 @@ class TicketLineService:
         ticket_id: int,
         lines: list[tuple[int, int, str | None]] | None = None,
         washer_id: int | None,
+        washer_daily_group_id: int | None = None,
     ) -> None:
         """Inserta líneas en tickets_branch_offices_services (sin commit)."""
         if ticket_id <= 0:
             raise TicketLineValidationError("El ticket no es válido")
+        if washer_id is not None and washer_daily_group_id is not None:
+            raise TicketLineValidationError("Seleccione un lavador o un grupo, no ambos")
 
         items: list[tuple[int, int | None, str | None]] = []
         if lines:
@@ -194,12 +204,15 @@ class TicketLineService:
         if not items:
             return
 
-        for service_id, line_total, additional_name in items:
-            additional = (additional_name or "").strip() or None
+        resolved_washer: int | None = None
+        if washer_daily_group_id is None:
             resolved_washer = self._resolve_washer(
                 ticket_id=ticket_id,
                 washer_id=washer_id,
             )
+
+        for service_id, line_total, additional_name in items:
+            additional = (additional_name or "").strip() or None
             if line_total is None:
                 raise TicketLineValidationError(
                     "Indique el monto de cada servicio al crear el ticket",
@@ -217,6 +230,7 @@ class TicketLineService:
                         service_id=0,
                         additional_service=additional[:255],
                         washer_id=resolved_washer,
+                        washer_daily_group_id=washer_daily_group_id,
                         total=stored_total,
                         added_date=self._now(),
                         updated_date=self._timestamp_str(),
@@ -238,6 +252,7 @@ class TicketLineService:
                     service_id=service_id,
                     additional_service=None,
                     washer_id=resolved_washer,
+                    washer_daily_group_id=washer_daily_group_id,
                     total=stored_total,
                     added_date=self._now(),
                     updated_date=self._timestamp_str(),

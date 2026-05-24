@@ -4,7 +4,7 @@ from datetime import date, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.datetime_utils import business_local_date
+from app.core.datetime_utils import business_local_date, business_today
 
 from app.core.pricing import round_pesos, ticket_totals_from_subtotal
 from app.core.ticket_total import parse_ticket_total, sync_ticket_total
@@ -29,6 +29,7 @@ from app.schemas.ticket import (
 from app.schemas.user import UserPublic
 from app.services.raffle_service import RaffleService, RaffleValidationError
 from app.services.ticket_line_service import TicketLineService, TicketLineValidationError
+from app.services.washer_daily_group_service import WasherDailyGroupService
 
 
 class TicketNotFoundError(Exception):
@@ -50,6 +51,15 @@ class TicketService:
         self.db = db
         self._lines = TicketLineService(db)
         self._raffles = RaffleService(db)
+        self._washer_groups = WasherDailyGroupService(db)
+
+    def _validate_ticket_group(self, group_id: int) -> None:
+        group = self._washer_groups.get_active_group(group_id, group_date=business_today())
+        if group is None:
+            raise TicketValidationError("El grupo no existe o no corresponde al día actual")
+        members = self._washer_groups.member_ids_for_group(group_id)
+        if not members:
+            raise TicketValidationError("El grupo no tiene lavadores")
 
     @staticmethod
     def _now() -> datetime:
@@ -189,8 +199,9 @@ class TicketService:
     def _ticket_ids_for_branch_subquery(self, branch_office_id: int):
         from app.models.branch_office_washer import BranchOfficeWasher
         from app.models.ticket_branch_office_service import TicketBranchOfficeService
+        from app.models.washer_daily_group import WasherDailyGroup
 
-        return (
+        washer_ticket_ids = (
             select(TicketBranchOfficeService.ticket_id)
             .join(
                 BranchOfficeWasher,
@@ -204,6 +215,21 @@ class TicketService:
                 TicketBranchOfficeService.washer_id.isnot(None),
             )
         )
+        group_ticket_ids = (
+            select(TicketBranchOfficeService.ticket_id)
+            .join(
+                WasherDailyGroup,
+                TicketBranchOfficeService.washer_daily_group_id == WasherDailyGroup.id,
+            )
+            .where(
+                WasherDailyGroup.branch_office_id == branch_office_id,
+                WasherDailyGroup.deleted_date.is_(None),
+                TicketBranchOfficeService.deleted_date.is_(None),
+                TicketBranchOfficeService.ticket_id.isnot(None),
+                TicketBranchOfficeService.washer_daily_group_id.isnot(None),
+            )
+        )
+        return washer_ticket_ids.union(group_ticket_ids)
 
     def _list_stmt_for_user(self, user: UserPublic):
         stmt = self._active_filter(select(Ticket)).order_by(Ticket.added_date.desc())
@@ -234,7 +260,26 @@ class TicketService:
             )
             .limit(1)
         )
-        return self.db.scalars(stmt).first() is not None
+        if self.db.scalars(stmt).first() is not None:
+            return True
+
+        from app.models.washer_daily_group import WasherDailyGroup
+
+        group_stmt = (
+            select(TicketBranchOfficeService.id)
+            .join(
+                WasherDailyGroup,
+                TicketBranchOfficeService.washer_daily_group_id == WasherDailyGroup.id,
+            )
+            .where(
+                TicketBranchOfficeService.ticket_id == ticket_id,
+                TicketBranchOfficeService.deleted_date.is_(None),
+                WasherDailyGroup.branch_office_id == branch_office_id,
+                WasherDailyGroup.deleted_date.is_(None),
+            )
+            .limit(1)
+        )
+        return self.db.scalars(group_stmt).first() is not None
 
     def _get_visible_ticket(self, ticket_id: int, user: UserPublic) -> Ticket:
         row = self.db.get(Ticket, ticket_id)
@@ -272,6 +317,24 @@ class TicketService:
         ).first()
         if washer_branch is not None:
             return int(washer_branch)
+
+        from app.models.washer_daily_group import WasherDailyGroup
+
+        group_branch = self.db.scalars(
+            select(WasherDailyGroup.branch_office_id)
+            .join(
+                TicketBranchOfficeService,
+                TicketBranchOfficeService.washer_daily_group_id == WasherDailyGroup.id,
+            )
+            .where(
+                TicketBranchOfficeService.ticket_id == ticket_id,
+                TicketBranchOfficeService.deleted_date.is_(None),
+                WasherDailyGroup.deleted_date.is_(None),
+            )
+            .limit(1),
+        ).first()
+        if group_branch is not None:
+            return int(group_branch)
         return None
 
     def _branch_name(self, ticket_id: int) -> str:
@@ -522,6 +585,11 @@ class TicketService:
 
     def create(self, data: TicketCreate) -> TicketCreateResponse:
         """Crear ticket sin cobro: el pago se confirma después (checkout / PayTicket)."""
+        if data.washer_id is not None and data.washer_daily_group_id is not None:
+            raise TicketValidationError("Seleccione un lavador o un grupo, no ambos")
+        if data.washer_daily_group_id is not None:
+            self._validate_ticket_group(data.washer_daily_group_id)
+
         active_raffle = self._raffles.get_current_active_raffle()
         if active_raffle is not None and not data.customer_id:
             raise TicketValidationError(
@@ -563,11 +631,20 @@ class TicketService:
                     ticket_id=row.id,
                     lines=service_lines,
                     washer_id=data.washer_id,
+                    washer_daily_group_id=data.washer_daily_group_id,
                 )
             elif data.washer_id is not None:
                 self._lines.assign_washer_to_ticket(
                     row.id,
                     data.washer_id,
+                    commit=False,
+                )
+            elif data.washer_daily_group_id is not None:
+                self._validate_ticket_group(data.washer_daily_group_id)
+                self._lines.assign_washer_to_ticket(
+                    row.id,
+                    None,
+                    washer_daily_group_id=data.washer_daily_group_id,
                     commit=False,
                 )
 

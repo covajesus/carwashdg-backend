@@ -32,6 +32,7 @@ class TicketCreate(BaseModel):
     needs_tax_receipt: bool | None = None
     status_id: int | None = None
     washer_id: int | None = None
+    washer_daily_group_id: int | None = None
     service_lines: list[TicketServiceLineInput] = Field(default_factory=list)
     subtotal: int | None = Field(default=None, ge=0)
     tax: int | None = Field(default=None, ge=0)

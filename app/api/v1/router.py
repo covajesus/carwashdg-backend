@@ -21,6 +21,7 @@ from app.api.v1.endpoints import (
     tickets,
     users,
     washer_pay,
+    washer_daily_groups,
 )
 
 api_router = APIRouter()
@@ -44,3 +45,4 @@ api_router.include_router(roles.router)
 api_router.include_router(tickets.router)
 api_router.include_router(ticket_lines.router)
 api_router.include_router(washer_pay.router)
+api_router.include_router(washer_daily_groups.router)

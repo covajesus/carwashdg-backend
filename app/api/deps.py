@@ -24,6 +24,7 @@ from app.services.ticket_line_service import TicketLineService
 from app.services.ticket_service import TicketService
 from app.services.cash_closure_service import CashClosureService
 from app.services.washer_pay_service import WasherPayService
+from app.services.washer_daily_group_service import WasherDailyGroupService
 
 DbSession = Annotated[Session, Depends(get_db)]
 
@@ -82,6 +83,10 @@ def get_ticket_line_service(db: DbSession) -> TicketLineService:
 
 def get_washer_pay_service(db: DbSession) -> WasherPayService:
     return WasherPayService(db)
+
+
+def get_washer_daily_group_service(db: DbSession) -> WasherDailyGroupService:
+    return WasherDailyGroupService(db)
 
 
 def get_expense_service(db: DbSession) -> ExpenseService:
@@ -144,6 +149,10 @@ RolServiceDep = Annotated[RolService, Depends(get_rol_service)]
 TicketServiceDep = Annotated[TicketService, Depends(get_ticket_service)]
 TicketLineServiceDep = Annotated[TicketLineService, Depends(get_ticket_line_service)]
 WasherPayServiceDep = Annotated[WasherPayService, Depends(get_washer_pay_service)]
+WasherDailyGroupServiceDep = Annotated[
+    WasherDailyGroupService,
+    Depends(get_washer_daily_group_service),
+]
 ExpenseServiceDep = Annotated[ExpenseService, Depends(get_expense_service)]
 CashClosureServiceDep = Annotated[CashClosureService, Depends(get_cash_closure_service)]
 UserServiceDep = Annotated[UserService, Depends(get_user_service)]

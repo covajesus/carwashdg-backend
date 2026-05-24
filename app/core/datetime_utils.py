@@ -10,6 +10,10 @@ def datetime_to_iso(value: datetime | None) -> str | None:
     return value.isoformat()
 
 
+def business_today() -> date:
+    return datetime.now(BUSINESS_TIMEZONE).date()
+
+
 def business_local_date(value: datetime | None) -> date | None:
     """Calendar day in Mexico City for ticket/report grouping."""
     if value is None:
