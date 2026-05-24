@@ -59,7 +59,7 @@ class ExpenseService:
         branch = self.db.get(BranchOffice, branch_office_id)
         if branch is None or not branch.is_active:
             return None
-        return branch.name
+        return branch.branch_office.strip() or None
 
     def to_public(self, row: Expense) -> ExpensePublic:
         branch_id = row.branch_office_id
