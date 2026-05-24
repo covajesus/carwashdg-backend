@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 UserRole = Literal["admin", "manager", "washer"]
 
@@ -18,6 +18,17 @@ class UserCreate(BaseModel):
     dailyGoalPercentage: str | None = Field(default=None, max_length=255)
     active: bool = True
     statusId: str | None = None
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            text = value.strip()
+            return text or None
+        text = str(value).strip()
+        return text or None
 
     @model_validator(mode="after")
     def validate_profile(self) -> "UserCreate":
@@ -38,6 +49,17 @@ class UserUpdate(BaseModel):
     dailyGoalPercentage: str | None = Field(default=None, max_length=255)
     active: bool | None = None
     statusId: str | None = None
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            text = value.strip()
+            return text or None
+        text = str(value).strip()
+        return text or None
 
 
 class UserPublic(BaseModel):
