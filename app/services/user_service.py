@@ -1,4 +1,6 @@
 from datetime import datetime
+
+from app.core.datetime_utils import business_now
 import secrets
 
 from sqlalchemy import func, select
@@ -46,7 +48,7 @@ class UserService:
 
     @staticmethod
     def _now() -> datetime:
-        return datetime.now()
+        return business_now()
 
     @staticmethod
     def normalize_email(email: str) -> str:

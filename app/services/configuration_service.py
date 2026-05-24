@@ -1,5 +1,7 @@
 import re
 from datetime import datetime
+
+from app.core.datetime_utils import business_now
 from urllib.parse import urlparse
 
 from sqlalchemy import select
@@ -28,7 +30,7 @@ class ConfigurationService:
 
     @staticmethod
     def _now() -> datetime:
-        return datetime.now()
+        return business_now()
 
     @staticmethod
     def _is_valid_url(value: str) -> bool:

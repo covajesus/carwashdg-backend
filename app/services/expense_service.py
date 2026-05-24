@@ -3,6 +3,7 @@ from datetime import date, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.datetime_utils import business_now
 from app.models.expense import Expense
 from app.schemas.expense import ExpenseCreate, ExpensePublic, ExpenseUpdate
 
@@ -34,7 +35,7 @@ class ExpenseService:
 
     @staticmethod
     def _now() -> datetime:
-        return datetime.now()
+        return business_now()
 
     @staticmethod
     def type_label(expense_type: str) -> str:

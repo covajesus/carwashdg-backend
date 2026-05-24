@@ -1,13 +1,21 @@
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-BUSINESS_TIMEZONE = ZoneInfo("America/Mexico_City")
+BUSINESS_TIMEZONE = ZoneInfo("America/Santiago")
+
+
+def business_now() -> datetime:
+    """Hora actual en Chile; naive para columnas DATETIME en MySQL."""
+    return datetime.now(BUSINESS_TIMEZONE).replace(tzinfo=None)
 
 
 def datetime_to_iso(value: datetime | None) -> str | None:
     if value is None:
         return None
-    return value.isoformat()
+    localized = value
+    if localized.tzinfo is None:
+        localized = localized.replace(tzinfo=BUSINESS_TIMEZONE)
+    return localized.isoformat()
 
 
 def business_today() -> date:
@@ -15,7 +23,7 @@ def business_today() -> date:
 
 
 def business_local_date(value: datetime | None) -> date | None:
-    """Calendar day in Mexico City for ticket/report grouping."""
+    """Día calendario en Chile para tickets e informes."""
     if value is None:
         return None
     if value.tzinfo is None:

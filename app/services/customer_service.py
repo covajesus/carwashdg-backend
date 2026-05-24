@@ -1,6 +1,8 @@
 import re
 from datetime import datetime
 
+from app.core.datetime_utils import business_now
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -24,7 +26,7 @@ class CustomerService:
 
     @staticmethod
     def _now() -> datetime:
-        return datetime.now()
+        return business_now()
 
     @staticmethod
     def to_public(row: Customer) -> CustomerPublic:

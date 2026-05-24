@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from app.core.datetime_utils import business_now
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -17,7 +19,7 @@ class BranchOfficeManagerService:
 
     @staticmethod
     def _now() -> datetime:
-        return datetime.now()
+        return business_now()
 
     def _active_filter(self, stmt):
         return stmt.where(BranchOfficeManager.deleted_date.is_(None))

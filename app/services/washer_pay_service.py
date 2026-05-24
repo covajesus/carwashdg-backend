@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
+
+from app.core.datetime_utils import business_now
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -240,7 +242,7 @@ class WasherPayService:
             raise WasherPayValidationError("El lavador no pertenece a esta sucursal")
 
         is_paid = payment_status == "paid"
-        now = datetime.now()
+        now = business_now()
         row = self.db.scalars(
             select(WasherPaySettlement).where(
                 WasherPaySettlement.branch_office_id == branch_office_id,

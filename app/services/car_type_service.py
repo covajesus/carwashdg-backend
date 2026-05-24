@@ -3,7 +3,7 @@ from datetime import datetime
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.datetime_utils import datetime_to_iso
+from app.core.datetime_utils import datetime_to_iso, business_now
 from app.models.car_type import CarType
 from app.schemas.car_type import CarTypeCreate, CarTypePublic, CarTypeUpdate
 
@@ -22,7 +22,7 @@ class CarTypeService:
 
     @staticmethod
     def _now() -> datetime:
-        return datetime.now()
+        return business_now()
 
     @staticmethod
     def to_public(row: CarType) -> CarTypePublic:

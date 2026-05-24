@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from app.core.datetime_utils import business_now
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -21,7 +23,7 @@ class BranchOfficeService:
 
     @staticmethod
     def _now() -> datetime:
-        return datetime.now()
+        return business_now()
 
     @staticmethod
     def to_public(row: BranchOffice) -> BranchOfficePublic:

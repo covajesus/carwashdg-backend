@@ -3,6 +3,7 @@ from datetime import date, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.datetime_utils import business_now, business_today
 from app.core.roles import MANAGER_ROL_ID
 from app.models.manager_cash_closure import (
     CASH_CLOSURE_STATUS_CLOSED,
@@ -23,11 +24,11 @@ class CashClosureService:
 
     @staticmethod
     def _now() -> datetime:
-        return datetime.now()
+        return business_now()
 
     @staticmethod
     def _today() -> date:
-        return date.today()
+        return business_today()
 
     @staticmethod
     def _require_manager(user: UserPublic) -> int:

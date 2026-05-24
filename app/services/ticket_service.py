@@ -4,7 +4,7 @@ from datetime import date, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.datetime_utils import business_local_date, business_today
+from app.core.datetime_utils import business_local_date, business_now, business_today, datetime_to_iso
 
 from app.core.pricing import round_pesos, ticket_totals_from_subtotal
 from app.core.ticket_total import parse_ticket_total, sync_ticket_total
@@ -70,7 +70,7 @@ class TicketService:
 
     @staticmethod
     def _now() -> datetime:
-        return datetime.now()
+        return business_now()
 
     def to_public(self, row: Ticket) -> TicketPublic:
         return TicketPublic(
@@ -384,7 +384,7 @@ class TicketService:
 
     def _to_list_item(self, row: Ticket) -> TicketListItem:
         pricing = self._ticket_pricing(row.id, row)
-        created = row.added_date.isoformat() if row.added_date else ""
+        created = datetime_to_iso(row.added_date) or ""
         return TicketListItem(
             id=str(row.id),
             folio=f"T-{row.id}",

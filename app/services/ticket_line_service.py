@@ -3,7 +3,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.datetime_utils import datetime_to_iso
+from app.core.datetime_utils import business_now, datetime_to_iso
 from app.core.pricing import round_pesos
 from app.models.service import Service
 from app.models.ticket_branch_office_service import TicketBranchOfficeService
@@ -30,11 +30,11 @@ class TicketLineService:
 
     @staticmethod
     def _now() -> datetime:
-        return datetime.now()
+        return business_now()
 
     @staticmethod
     def _timestamp_str() -> str:
-        return datetime.now().isoformat()
+        return datetime_to_iso(business_now()) or ""
 
     @staticmethod
     def _resolved_line_total(row: TicketBranchOfficeService) -> int:

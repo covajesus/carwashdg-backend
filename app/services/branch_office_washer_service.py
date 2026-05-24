@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from app.core.datetime_utils import business_now
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -17,7 +19,7 @@ class BranchOfficeWasherService:
 
     @staticmethod
     def _now() -> datetime:
-        return datetime.now()
+        return business_now()
 
     @staticmethod
     def _normalize_required_text(value: str | None, *, label: str) -> str:

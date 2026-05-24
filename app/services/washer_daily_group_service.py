@@ -5,7 +5,7 @@ from datetime import date, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.datetime_utils import business_today
+from app.core.datetime_utils import business_now, business_today
 from app.core.roles import WASHER_ROL_ID
 from app.models.branch_office import BranchOffice
 from app.models.user import User
@@ -41,7 +41,7 @@ class WasherDailyGroupService:
 
     @staticmethod
     def _now() -> datetime:
-        return datetime.now()
+        return business_now()
 
     @staticmethod
     def _today() -> date:

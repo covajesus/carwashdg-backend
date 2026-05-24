@@ -3,7 +3,7 @@ from datetime import datetime
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.datetime_utils import datetime_to_iso
+from app.core.datetime_utils import datetime_to_iso, business_now
 from app.models.status import Status
 from app.schemas.status import StatusCreate, StatusPublic, StatusUpdate
 
@@ -22,7 +22,7 @@ class StatusService:
 
     @staticmethod
     def _now() -> datetime:
-        return datetime.now()
+        return business_now()
 
     @staticmethod
     def to_public(row: Status) -> StatusPublic:

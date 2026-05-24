@@ -4,7 +4,7 @@ from datetime import datetime
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.datetime_utils import datetime_to_iso
+from app.core.datetime_utils import datetime_to_iso, business_now
 from app.models.raffle import Raffle
 from app.models.raffle_number import RaffleNumber
 from app.schemas.raffle import (
@@ -35,7 +35,7 @@ class RaffleService:
 
     @staticmethod
     def _now() -> datetime:
-        return datetime.now()
+        return business_now()
 
     @staticmethod
     def _parse_date_bound(
