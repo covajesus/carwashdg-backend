@@ -21,8 +21,8 @@ from app.schemas.washer_daily_group import (
     WasherDailyGroupPublic,
     WasherDailyGroupUpdate,
 )
+from app.core.branch_scope import branch_scope_for_user
 from app.services.branch_office_washer_service import BranchOfficeWasherService
-from app.services.ticket_service import TicketService
 
 
 class WasherDailyGroupNotFoundError(Exception):
@@ -47,7 +47,7 @@ class WasherDailyGroupService:
         return business_today()
 
     def _ensure_branch_access(self, user: UserPublic, branch_office_id: int) -> BranchOffice:
-        scope = TicketService._branch_scope_for_user(user)
+        scope = branch_scope_for_user(user)
         if scope == 0:
             raise WasherDailyGroupValidationError("No tiene permiso para consultar grupos")
         if scope is not None and scope != branch_office_id:
@@ -58,7 +58,7 @@ class WasherDailyGroupService:
         return branch
 
     def _resolve_branch_for_user(self, user: UserPublic) -> int:
-        scope = TicketService._branch_scope_for_user(user)
+        scope = branch_scope_for_user(user)
         if scope is None or scope == 0:
             raise WasherDailyGroupValidationError("No tiene sucursal asignada")
         return scope

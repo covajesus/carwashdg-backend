@@ -29,7 +29,7 @@ from app.schemas.ticket import (
 from app.schemas.user import UserPublic
 from app.services.raffle_service import RaffleService, RaffleValidationError
 from app.services.ticket_line_service import TicketLineService, TicketLineValidationError
-from app.services.washer_daily_group_service import WasherDailyGroupService
+from app.core.branch_scope import branch_scope_for_user
 
 
 class TicketNotFoundError(Exception):
@@ -51,13 +51,20 @@ class TicketService:
         self.db = db
         self._lines = TicketLineService(db)
         self._raffles = RaffleService(db)
-        self._washer_groups = WasherDailyGroupService(db)
+
+    def _washer_groups_service(self):
+        from app.services.washer_daily_group_service import WasherDailyGroupService
+
+        return WasherDailyGroupService(self.db)
 
     def _validate_ticket_group(self, group_id: int) -> None:
-        group = self._washer_groups.get_active_group(group_id, group_date=business_today())
+        group = self._washer_groups_service().get_active_group(
+            group_id,
+            group_date=business_today(),
+        )
         if group is None:
             raise TicketValidationError("El grupo no existe o no corresponde al día actual")
-        members = self._washer_groups.member_ids_for_group(group_id)
+        members = self._washer_groups_service().member_ids_for_group(group_id)
         if not members:
             raise TicketValidationError("El grupo no tiene lavadores")
 
@@ -184,17 +191,7 @@ class TicketService:
 
     @staticmethod
     def _branch_scope_for_user(user: UserPublic) -> int | None:
-        """
-        None: administrador, sin filtro de sucursal.
-        int >= 1: gerente, solo esa sucursal.
-        0: gerente sin sucursal u otro rol → sin tickets visibles.
-        """
-        if user.role == "admin":
-            return None
-        if user.role == "manager":
-            bid = user.branchOfficeId
-            return bid if bid is not None and bid >= 1 else 0
-        return 0
+        return branch_scope_for_user(user)
 
     def _ticket_ids_for_branch_subquery(self, branch_office_id: int):
         from app.models.branch_office_washer import BranchOfficeWasher
