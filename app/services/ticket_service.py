@@ -75,6 +75,49 @@ class TicketService:
         row = self.db.get(Status, status_id)
         return row.status if row and row.is_active else "—"
 
+    @staticmethod
+    def _status_label_is_open(status_text: str) -> bool:
+        normalized = status_text.strip().lower()
+        if not normalized or normalized == "—":
+            return True
+        if any(x in normalized for x in ("no pagado", "no pagó", "no pago", "cancel")):
+            return False
+        if any(
+            x in normalized
+            for x in ("pagad", "cobrad", "cerrad", "complet", "finaliz")
+        ):
+            return False
+        return True
+
+    def _resolve_closed_status_id(self) -> int | None:
+        rows = self.db.scalars(
+            select(Status)
+            .where(Status.deleted_date.is_(None))
+            .order_by(Status.id.asc()),
+        ).all()
+        for row in rows:
+            text = row.status.strip().lower()
+            if any(x in text for x in ("no pagado", "no pagó", "no pago", "en proceso", "pendiente")):
+                continue
+            if any(
+                x in text
+                for x in ("pagad", "cobrad", "cerrad", "complet", "finaliz")
+            ):
+                return row.id
+        return None
+
+    def _list_status_for_ticket(self, row: Ticket) -> str:
+        status_text = self._status_text(row.status_id)
+        if row.payment_type_id in (PAYMENT_TYPE_EFECTIVO, PAYMENT_TYPE_TRANSBANK):
+            if self._status_label_is_open(status_text):
+                closed_id = self._resolve_closed_status_id()
+                if closed_id is not None:
+                    closed_row = self.db.get(Status, closed_id)
+                    if closed_row and closed_row.is_active:
+                        return closed_row.status
+                return "Pagado"
+        return status_text
+
     def _customer_name(self, ticket: Ticket) -> str:
         if ticket.customer_id:
             customer = self.db.get(Customer, ticket.customer_id)
@@ -252,7 +295,7 @@ class TicketService:
             vehicleTypeId=str(row.car_type_id or ""),
             licensePlate=row.license_plate_id or "",
             total=pricing["total"],
-            status=self._status_text(row.status_id),
+            status=self._list_status_for_ticket(row),
             createdAt=created,
             customer_name=self._customer_name(row),
             paymentTypeId=(
@@ -540,6 +583,9 @@ class TicketService:
         row.subtotal = str(round_pesos(data.subtotal))
         row.tax = str(round_pesos(data.tax))
         row.total = str(round_pesos(data.total))
+        closed_status_id = self._resolve_closed_status_id()
+        if closed_status_id is not None:
+            row.status_id = closed_status_id
         row.updated_date = self._now()
 
         raffle_assignment = None
