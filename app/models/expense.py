@@ -13,6 +13,7 @@ class Expense(Base):
     expense_type: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     amount: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     expense_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    branch_office_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     photo_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     added_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     updated_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
