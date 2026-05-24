@@ -162,6 +162,17 @@ class TicketService:
             for x in ("pagad", "cobrad", "cerrad", "complet", "finaliz")
         )
 
+    def ticket_is_in_process(self, row: Ticket) -> bool:
+        """Open ticket still being washed or awaiting payment (excludes paid and not-paid)."""
+        if self.ticket_is_collected(row):
+            return False
+        if row.status_id == TICKET_STATUS_NOT_PAID_ID:
+            return False
+        status_text = self._status_text(row.status_id).strip().lower()
+        if any(x in status_text for x in ("no pagado", "no pagó", "no pago", "cancel")):
+            return False
+        return self._status_label_is_open(status_text)
+
     def ticket_revenue_day(self, row: Ticket) -> date | None:
         """Business day for earnings and washer pay (uses checkout date when collected)."""
         if self.ticket_is_collected(row) and row.updated_date is not None:
@@ -406,10 +417,26 @@ class TicketService:
         return [self._to_list_item(row) for row in self.db.scalars(stmt).all()]
 
     def summary_for_user(self, user: UserPublic) -> TicketSummaryResponse:
-        items = self.list_for_user(user)
+        stmt = self._list_stmt_for_user(user)
+        rows = self.db.scalars(stmt).all()
+        total_earnings = 0
+        ticket_count = 0
+        in_process_count = 0
+        paid_count = 0
+        for row in rows:
+            ticket_count += 1
+            if self.ticket_is_collected(row):
+                paid_count += 1
+                if row.id is not None:
+                    pricing = self._ticket_pricing(row.id, row)
+                    total_earnings += pricing["total"]
+            elif self.ticket_is_in_process(row):
+                in_process_count += 1
         return TicketSummaryResponse(
-            totalEarnings=sum(item.total for item in items),
-            ticketCount=len(items),
+            totalEarnings=total_earnings,
+            ticketCount=ticket_count,
+            inProcessCount=in_process_count,
+            paidCount=paid_count,
         )
 
     def earnings_by_branch(

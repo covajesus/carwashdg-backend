@@ -102,10 +102,12 @@ class TicketListResponse(BaseModel):
 
 
 class TicketSummaryResponse(BaseModel):
-    """Suma de `total` por ticket (misma lógica que el listado admin)."""
+    """totalEarnings: tickets cobrados/cerrados; ticketCount: todos los tickets visibles."""
 
     totalEarnings: int = Field(ge=0)
     ticketCount: int = Field(ge=0)
+    inProcessCount: int = Field(ge=0, default=0)
+    paidCount: int = Field(ge=0, default=0)
 
 
 class BranchEarningsItem(BaseModel):

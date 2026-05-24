@@ -21,9 +21,6 @@ EXPENSE_TYPE_LABELS: dict[str, str] = {
     "otros": "Otros",
 }
 
-MAX_PHOTO_URL_LENGTH = 4_000_000
-
-
 class ExpenseNotFoundError(Exception):
     pass
 
@@ -96,8 +93,6 @@ class ExpenseService:
         text = value.strip()
         if not text:
             return None
-        if len(text) > MAX_PHOTO_URL_LENGTH:
-            raise ExpenseValidationError("La foto es demasiado grande")
         return text
 
     def _validate_branch_exists(self, branch_office_id: int) -> None:
