@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.pricing import round_pesos
@@ -231,7 +231,6 @@ class WasherPayService:
                 Ticket.deleted_date.is_(None),
                 TicketBranchOfficeService.deleted_date.is_(None),
                 TicketBranchOfficeService.washer_id == washer_id,
-                func.date(Ticket.added_date) == day,
             )
             .order_by(Ticket.id.asc(), TicketBranchOfficeService.id.asc()),
         ).all()
@@ -244,6 +243,9 @@ class WasherPayService:
         contexts: list[_LinePayContext] = []
         for line, ticket in rows:
             if ticket.id is None:
+                continue
+            revenue_day = self._tickets.ticket_revenue_day(ticket)
+            if revenue_day != day:
                 continue
             if not self._tickets.ticket_eligible_for_washer_pay(ticket):
                 continue

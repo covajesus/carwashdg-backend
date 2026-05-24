@@ -82,6 +82,7 @@ class TicketListItem(BaseModel):
     createdAt: str
     customer_name: str
     paymentTypeId: str | None = None
+    statusId: str | None = None
 
 
 class TicketServiceLine(BaseModel):

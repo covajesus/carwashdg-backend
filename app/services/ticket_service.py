@@ -1,8 +1,10 @@
 from collections import defaultdict
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+from app.core.datetime_utils import business_local_date
 
 from app.core.pricing import round_pesos, ticket_totals_from_subtotal
 from app.core.ticket_total import parse_ticket_total, sync_ticket_total
@@ -39,6 +41,7 @@ class TicketValidationError(Exception):
 
 PAYMENT_TYPE_EFECTIVO = 1
 PAYMENT_TYPE_TRANSBANK = 2
+TICKET_STATUS_PAID_ID = 1
 TICKET_STATUS_NOT_PAID_ID = 3
 
 
@@ -91,6 +94,9 @@ class TicketService:
         return True
 
     def _resolve_closed_status_id(self) -> int | None:
+        paid = self.db.get(Status, TICKET_STATUS_PAID_ID)
+        if paid is not None and paid.is_active:
+            return TICKET_STATUS_PAID_ID
         rows = self.db.scalars(
             select(Status)
             .where(Status.deleted_date.is_(None))
@@ -109,6 +115,10 @@ class TicketService:
 
     def _list_status_for_ticket(self, row: Ticket) -> str:
         status_text = self._status_text(row.status_id)
+        if row.status_id == TICKET_STATUS_PAID_ID:
+            paid = self.db.get(Status, TICKET_STATUS_PAID_ID)
+            if paid and paid.is_active:
+                return paid.status
         if row.payment_type_id in (PAYMENT_TYPE_EFECTIVO, PAYMENT_TYPE_TRANSBANK):
             if self._status_label_is_open(status_text):
                 closed_id = self._resolve_closed_status_id()
@@ -119,9 +129,11 @@ class TicketService:
                 return "Pagado"
         return status_text
 
-    def ticket_eligible_for_washer_pay(self, row: Ticket) -> bool:
-        """Cuenta comisión si el ticket fue cobrado o tiene estatus cerrado/pagado."""
+    def ticket_is_collected(self, row: Ticket) -> bool:
+        """Paid/collected ticket: checkout payment or catalog status Pagado (id=1)."""
         if row.payment_type_id in (PAYMENT_TYPE_EFECTIVO, PAYMENT_TYPE_TRANSBANK):
+            return True
+        if row.status_id == TICKET_STATUS_PAID_ID:
             return True
         if row.status_id == TICKET_STATUS_NOT_PAID_ID:
             return False
@@ -132,6 +144,16 @@ class TicketService:
             x in status_text
             for x in ("pagad", "cobrad", "cerrad", "complet", "finaliz")
         )
+
+    def ticket_revenue_day(self, row: Ticket) -> date | None:
+        """Business day for earnings and washer pay (uses checkout date when collected)."""
+        if self.ticket_is_collected(row) and row.updated_date is not None:
+            return business_local_date(row.updated_date)
+        return business_local_date(row.added_date)
+
+    def ticket_eligible_for_washer_pay(self, row: Ticket) -> bool:
+        """Washer commission applies to collected/paid tickets only."""
+        return self.ticket_is_collected(row)
 
     def _customer_name(self, ticket: Ticket) -> str:
         if ticket.customer_id:
@@ -316,6 +338,7 @@ class TicketService:
             paymentTypeId=(
                 str(row.payment_type_id) if row.payment_type_id else None
             ),
+            statusId=str(row.status_id) if row.status_id is not None else None,
         )
 
     def list_for_user(self, user: UserPublic) -> list[TicketListItem]:
@@ -367,6 +390,8 @@ class TicketService:
             resolved_branch = self._resolve_branch_office_id_for_ticket(row.id)
             bucket_key = resolved_branch if resolved_branch is not None else 0
             if filter_branch_id is not None and bucket_key != filter_branch_id:
+                continue
+            if not self.ticket_is_collected(row):
                 continue
 
             pricing = self._ticket_pricing(row.id, row)
@@ -439,11 +464,11 @@ class TicketService:
             bucket_key = resolved_branch if resolved_branch is not None else 0
             if bucket_key != branch_office_id:
                 continue
+            if not self.ticket_is_collected(row):
+                continue
 
-            if row.added_date is not None:
-                day_key = row.added_date.date().isoformat()
-            else:
-                day_key = "sin-fecha"
+            revenue_day = self.ticket_revenue_day(row)
+            day_key = revenue_day.isoformat() if revenue_day is not None else "sin-fecha"
 
             pricing = self._ticket_pricing(row.id, row)
             bucket = buckets[day_key]
