@@ -9,7 +9,7 @@ UserRole = Literal["admin", "manager", "washer"]
 class UserCreate(BaseModel):
     fullName: str = Field(default="", max_length=255)
     email: str | None = None
-    password: str = Field(..., min_length=6, max_length=255)
+    password: str | None = Field(default=None, min_length=6, max_length=255)
     role: UserRole = "washer"
     branchOfficeId: int | None = Field(default=None, ge=1)
     weekPercentage: str | None = Field(default=None, max_length=255)
@@ -34,6 +34,10 @@ class UserCreate(BaseModel):
     def validate_profile(self) -> "UserCreate":
         if not self.fullName.strip():
             raise ValueError("El nombre completo es obligatorio")
+        if self.role != "washer":
+            pwd = (self.password or "").strip()
+            if len(pwd) < 6:
+                raise ValueError("La contraseña debe tener al menos 6 caracteres")
         return self
 
 

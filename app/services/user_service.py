@@ -1,4 +1,5 @@
 from datetime import datetime
+import secrets
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -233,6 +234,14 @@ class UserService:
         if rol_id is None:
             raise UserValidationError("El rol no es válido")
 
+        raw_password = (data.password or "").strip()
+        if rol_id == WASHER_ROL_ID:
+            stored_password = hash_password(raw_password) if raw_password else hash_password(secrets.token_urlsafe(32))
+        else:
+            if len(raw_password) < 6:
+                raise UserValidationError("La contraseña debe tener al menos 6 caracteres")
+            stored_password = hash_password(raw_password)
+
         status_id = self._resolve_status_id(
             active=data.active,
             status_id_raw=data.statusId,
@@ -244,7 +253,7 @@ class UserService:
             status_id=status_id,
             full_name=full_name,
             email=email,
-            password=hash_password(data.password),
+            password=stored_password,
             added_date=now,
             updated_date=now,
             deleted_date=None,
