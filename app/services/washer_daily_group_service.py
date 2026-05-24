@@ -22,6 +22,7 @@ from app.schemas.washer_daily_group import (
     WasherDailyGroupUpdate,
 )
 from app.core.branch_scope import branch_scope_for_user
+from app.core.user_status import active_from_status_id
 from app.services.branch_office_washer_service import BranchOfficeWasherService
 
 
@@ -283,6 +284,25 @@ class WasherDailyGroupService:
             member.deleted_date = now
         self.db.commit()
 
+    def _active_washer_ids_for_branch(self, branch_office_id: int) -> list[int]:
+        branch_washer_ids = self._branch_washers.list_washer_ids_for_branch(branch_office_id)
+        if not branch_washer_ids:
+            return []
+        rows = self.db.scalars(
+            select(User)
+            .where(
+                User.id.in_(branch_washer_ids),
+                User.rol_id == WASHER_ROL_ID,
+                User.deleted_date.is_(None),
+            )
+            .order_by(User.full_name.asc(), User.id.asc()),
+        ).all()
+        return [
+            row.id
+            for row in rows
+            if row.id is not None and active_from_status_id(row.status_id)
+        ]
+
     def ticket_washer_options(
         self,
         user: UserPublic,
@@ -300,13 +320,13 @@ class WasherDailyGroupService:
             branch_office_id=branch_office_id,
             group_date=day,
         )
-        branch_washer_ids = self._branch_washers.list_washer_ids_for_branch(branch_office_id)
+        active_washer_ids = self._active_washer_ids_for_branch(branch_office_id)
         washers = [
             TicketWasherOptionWasher(
                 id=str(washer_id),
                 full_name=self._washer_full_name(washer_id),
             )
-            for washer_id in branch_washer_ids
+            for washer_id in active_washer_ids
             if washer_id not in grouped_ids
         ]
         group_items = [
