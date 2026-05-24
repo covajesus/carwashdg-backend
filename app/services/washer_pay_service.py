@@ -24,7 +24,7 @@ from app.schemas.washer_pay import (
     WasherPaySummaryResponse,
 )
 from app.services.branch_office_washer_service import BranchOfficeWasherService
-from app.services.ticket_service import PAYMENT_TYPE_EFECTIVO, PAYMENT_TYPE_TRANSBANK, TicketService
+from app.services.ticket_service import TicketService
 
 
 class WasherPayValidationError(Exception):
@@ -87,6 +87,19 @@ class WasherPayService:
         if branch is None or not branch.is_active:
             raise WasherPayValidationError("La sucursal no existe")
         return branch
+
+    def _applied_percentage_raw(
+        self,
+        assignment,
+        *,
+        day: date,
+    ) -> str | None:
+        if assignment is None:
+            return None
+        is_sunday = day.weekday() == 6
+        raw = assignment.sunday_percentage if is_sunday else assignment.week_percentage
+        text = (raw or "").strip()
+        return text or None
 
     def _percentage_for_date(
         self,
@@ -218,9 +231,6 @@ class WasherPayService:
                 Ticket.deleted_date.is_(None),
                 TicketBranchOfficeService.deleted_date.is_(None),
                 TicketBranchOfficeService.washer_id == washer_id,
-                Ticket.payment_type_id.in_(
-                    (PAYMENT_TYPE_EFECTIVO, PAYMENT_TYPE_TRANSBANK),
-                ),
                 func.date(Ticket.added_date) == day,
             )
             .order_by(Ticket.id.asc(), TicketBranchOfficeService.id.asc()),
@@ -234,6 +244,8 @@ class WasherPayService:
         contexts: list[_LinePayContext] = []
         for line, ticket in rows:
             if ticket.id is None:
+                continue
+            if not self._tickets.ticket_eligible_for_washer_pay(ticket):
                 continue
             if not self._tickets._ticket_matches_branch(ticket.id, branch_office_id):
                 continue
@@ -341,12 +353,14 @@ class WasherPayService:
                 washer_id=washer_id,
                 day=day,
             )
+            assignment = self._branch_washer.get_active_assignment_for_washer(washer_id)
             items.append(
                 WasherPaySummaryItem(
                     washer_id=str(washer_id),
                     full_name=self._washer_full_name(washer_id),
                     amount=amount,
                     ticket_count=ticket_count,
+                    applied_percentage=self._applied_percentage_raw(assignment, day=day),
                     payment_status=status_map.get(washer_id, "unpaid"),
                 ),
             )

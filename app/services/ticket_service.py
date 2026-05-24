@@ -39,6 +39,7 @@ class TicketValidationError(Exception):
 
 PAYMENT_TYPE_EFECTIVO = 1
 PAYMENT_TYPE_TRANSBANK = 2
+TICKET_STATUS_NO_PAGADO_ID = 3
 
 
 class TicketService:
@@ -117,6 +118,20 @@ class TicketService:
                         return closed_row.status
                 return "Pagado"
         return status_text
+
+    def ticket_eligible_for_washer_pay(self, row: Ticket) -> bool:
+        """Cuenta comisión si el ticket fue cobrado o tiene estatus cerrado/pagado."""
+        if row.payment_type_id in (PAYMENT_TYPE_EFECTIVO, PAYMENT_TYPE_TRANSBANK):
+            return True
+        if row.status_id == TICKET_STATUS_NO_PAGADO_ID:
+            return False
+        status_text = self._status_text(row.status_id).strip().lower()
+        if any(x in status_text for x in ("no pagado", "no pagó", "no pago", "cancel")):
+            return False
+        return any(
+            x in status_text
+            for x in ("pagad", "cobrad", "cerrad", "complet", "finaliz")
+        )
 
     def _customer_name(self, ticket: Ticket) -> str:
         if ticket.customer_id:

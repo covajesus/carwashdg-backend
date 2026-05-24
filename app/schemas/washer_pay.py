@@ -10,6 +10,7 @@ class WasherPaySummaryItem(BaseModel):
     full_name: str
     amount: int = Field(ge=0)
     ticket_count: int = Field(ge=0)
+    applied_percentage: str | None = None
     payment_status: WasherPayPaymentStatus = "unpaid"
 
 
