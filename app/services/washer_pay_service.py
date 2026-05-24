@@ -24,6 +24,7 @@ from app.schemas.washer_pay import (
     WasherPaySummaryResponse,
 )
 from app.services.branch_office_washer_service import BranchOfficeWasherService
+from app.services.ticket_line_service import TicketLineService
 from app.services.ticket_service import TicketService
 
 
@@ -45,6 +46,7 @@ class WasherPayService:
         self.db = db
         self._branch_washer = BranchOfficeWasherService(db)
         self._tickets = TicketService(db)
+        self._lines = TicketLineService(db)
 
     @staticmethod
     def _parse_percentage(value: str | None, *, fallback: Decimal = Decimal("0")) -> Decimal:
@@ -217,6 +219,36 @@ class WasherPayService:
             payment_status=payment_status,
         )
 
+    def _ticket_washer_id(self, ticket_id: int, rows: list[TicketBranchOfficeService]) -> int | None:
+        for row in rows:
+            if row.washer_id is not None and row.washer_id > 0:
+                return row.washer_id
+        return self._lines.washer_id_for_ticket(ticket_id)
+
+    @staticmethod
+    def _is_payable_service_line(row: TicketBranchOfficeService) -> bool:
+        if (row.additional_service or "").strip():
+            return True
+        if row.service_id is not None and row.service_id >= 0:
+            return True
+        return False
+
+    def _line_pay_base(
+        self,
+        row: TicketBranchOfficeService,
+        *,
+        ticket: Ticket,
+        ticket_rows: list[TicketBranchOfficeService],
+    ) -> int:
+        amount = TicketLineService._resolved_line_total(row)
+        if amount > 0:
+            return amount
+        payable = [r for r in ticket_rows if self._is_payable_service_line(r)]
+        if len(payable) != 1 or payable[0].id != row.id:
+            return 0
+        pricing = self._tickets._ticket_pricing(ticket.id, ticket)
+        return max(0, pricing["total"])
+
     def _paid_lines_for_washer_on_date(
         self,
         *,
@@ -224,46 +256,70 @@ class WasherPayService:
         washer_id: int,
         day: date,
     ) -> list[_LinePayContext]:
-        rows = self.db.execute(
-            select(TicketBranchOfficeService, Ticket)
-            .join(Ticket, TicketBranchOfficeService.ticket_id == Ticket.id)
-            .where(
-                Ticket.deleted_date.is_(None),
-                TicketBranchOfficeService.deleted_date.is_(None),
-                TicketBranchOfficeService.washer_id == washer_id,
-            )
-            .order_by(Ticket.id.asc(), TicketBranchOfficeService.id.asc()),
-        ).all()
-
         assignment = self._branch_washer.get_active_assignment_for_washer(washer_id)
         if assignment is None:
             return []
 
         pct = self._percentage_for_date(assignment, day=day)
         contexts: list[_LinePayContext] = []
-        for line, ticket in rows:
+        seen: set[tuple[int, int]] = set()
+
+        branch_ticket_ids = self._tickets._ticket_ids_for_branch_subquery(branch_office_id)
+        ticket_rows = self.db.scalars(
+            select(Ticket)
+            .where(
+                Ticket.deleted_date.is_(None),
+                Ticket.id.in_(branch_ticket_ids),
+            )
+            .order_by(Ticket.id.asc()),
+        ).all()
+
+        for ticket in ticket_rows:
             if ticket.id is None:
-                continue
-            revenue_day = self._tickets.ticket_revenue_day(ticket)
-            if revenue_day != day:
                 continue
             if not self._tickets.ticket_eligible_for_washer_pay(ticket):
                 continue
+            if self._tickets.ticket_revenue_day(ticket) != day:
+                continue
             if not self._tickets._ticket_matches_branch(ticket.id, branch_office_id):
                 continue
-            line_total = int(line.total or 0)
-            if line_total <= 0:
+
+            line_rows = self.db.scalars(
+                select(TicketBranchOfficeService)
+                .where(
+                    TicketBranchOfficeService.ticket_id == ticket.id,
+                    TicketBranchOfficeService.deleted_date.is_(None),
+                )
+                .order_by(TicketBranchOfficeService.id.asc()),
+            ).all()
+            if not line_rows:
                 continue
-            commission = round_pesos(Decimal(line_total) * pct / Decimal("100"))
-            contexts.append(
-                _LinePayContext(
-                    line=line,
-                    ticket=ticket,
-                    line_total=line_total,
-                    percentage=pct,
-                    commission=commission,
-                ),
-            )
+
+            ticket_washer_id = self._ticket_washer_id(ticket.id, line_rows)
+            for line in line_rows:
+                if not self._is_payable_service_line(line):
+                    continue
+                line_washer_id = line.washer_id if line.washer_id and line.washer_id > 0 else ticket_washer_id
+                if line_washer_id != washer_id:
+                    continue
+                line_total = self._line_pay_base(line, ticket=ticket, ticket_rows=line_rows)
+                if line_total <= 0:
+                    continue
+                key = (ticket.id, line.id or 0)
+                if key in seen:
+                    continue
+                seen.add(key)
+                commission = round_pesos(Decimal(line_total) * pct / Decimal("100"))
+                contexts.append(
+                    _LinePayContext(
+                        line=line,
+                        ticket=ticket,
+                        line_total=line_total,
+                        percentage=pct,
+                        commission=commission,
+                    ),
+                )
+
         return contexts
 
     def _compute_washer_pay(
