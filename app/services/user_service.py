@@ -1,4 +1,3 @@
-import re
 from datetime import datetime
 
 from sqlalchemy import func, select
@@ -24,8 +23,6 @@ from app.services.branch_office_washer_service import (
     BranchOfficeWasherService,
     BranchOfficeWasherValidationError,
 )
-
-_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 
 class UserNotFoundError(Exception):
@@ -53,6 +50,11 @@ class UserService:
     @staticmethod
     def normalize_email(email: str) -> str:
         return email.strip().lower()
+
+    @staticmethod
+    def _resolve_email(raw: str | None) -> str:
+        text = (raw or "").strip()
+        return UserService.normalize_email(text) if text else ""
 
     def _rol_labels_by_id(self) -> dict[int, str]:
         stmt = select(Rol)
@@ -225,13 +227,7 @@ class UserService:
         if not full_name:
             raise UserValidationError("El nombre completo es obligatorio")
 
-        if data.role == "washer":
-            raw_email = str(data.email).strip() if data.email else ""
-            email = self.normalize_email(raw_email) if raw_email else ""
-        else:
-            email = self.normalize_email(str(data.email))
-        if email and self._find_by_email(email):
-            raise UserValidationError("Ya existe un usuario con ese correo")
+        email = self._resolve_email(data.email)
 
         rol_id = role_id_from_role(data.role)
         if rol_id is None:
@@ -304,10 +300,7 @@ class UserService:
             row.full_name = name
 
         if data.email is not None:
-            email = self.normalize_email(str(data.email))
-            if self._find_by_email(email, except_id=user_id):
-                raise UserValidationError("Ya existe un usuario con ese correo")
-            row.email = email
+            row.email = self._resolve_email(data.email)
 
         if data.password is not None and data.password:
             if len(data.password) < 6:
