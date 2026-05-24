@@ -7,7 +7,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.pricing import round_pesos
+from app.core.pricing import TICKET_IVA_GROSS_FACTOR, round_pesos
 from app.models.branch_office import BranchOffice
 from app.models.service import Service
 from app.models.ticket import Ticket
@@ -233,7 +233,7 @@ class WasherPayService:
             return True
         return False
 
-    def _line_pay_base(
+    def _line_pay_gross(
         self,
         row: TicketBranchOfficeService,
         *,
@@ -248,6 +248,28 @@ class WasherPayService:
             return 0
         pricing = self._tickets._ticket_pricing(ticket.id, ticket)
         return max(0, pricing["total"])
+
+    def _line_pay_net(
+        self,
+        row: TicketBranchOfficeService,
+        *,
+        ticket: Ticket,
+        ticket_rows: list[TicketBranchOfficeService],
+    ) -> int:
+        """Net line amount (subtotal, sin IVA) for washer commission."""
+        gross = self._line_pay_gross(row, ticket=ticket, ticket_rows=ticket_rows)
+        if gross <= 0:
+            return 0
+        pricing = self._tickets._ticket_pricing(ticket.id, ticket)
+        ticket_subtotal = pricing["subtotal"]
+        ticket_total = pricing["total"]
+        if ticket_subtotal <= 0:
+            return 0
+        if ticket_total <= 0:
+            if pricing["iva"] > 0:
+                return round_pesos(Decimal(gross) / TICKET_IVA_GROSS_FACTOR)
+            return gross
+        return round_pesos(Decimal(gross) * Decimal(ticket_subtotal) / Decimal(ticket_total))
 
     def _paid_lines_for_washer_on_date(
         self,
@@ -302,19 +324,19 @@ class WasherPayService:
                 line_washer_id = line.washer_id if line.washer_id and line.washer_id > 0 else ticket_washer_id
                 if line_washer_id != washer_id:
                     continue
-                line_total = self._line_pay_base(line, ticket=ticket, ticket_rows=line_rows)
-                if line_total <= 0:
+                line_net = self._line_pay_net(line, ticket=ticket, ticket_rows=line_rows)
+                if line_net <= 0:
                     continue
                 key = (ticket.id, line.id or 0)
                 if key in seen:
                     continue
                 seen.add(key)
-                commission = round_pesos(Decimal(line_total) * pct / Decimal("100"))
+                commission = round_pesos(Decimal(line_net) * pct / Decimal("100"))
                 contexts.append(
                     _LinePayContext(
                         line=line,
                         ticket=ticket,
-                        line_total=line_total,
+                        line_total=line_net,
                         percentage=pct,
                         commission=commission,
                     ),
