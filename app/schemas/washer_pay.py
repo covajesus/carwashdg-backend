@@ -31,6 +31,12 @@ class WasherPayDetailLine(BaseModel):
     label: str
     description: str
     base_amount: int = Field(ge=0)
+    line_gross_net: int | None = Field(
+        default=None,
+        ge=0,
+        description="Monto neto total de la línea antes de repartir en grupo",
+    )
+    group_member_count: int | None = Field(default=None, ge=1)
     percentage: str | None = None
     percentage_scope: WasherPayPercentageScope = "day"
     percentage_label: str | None = None

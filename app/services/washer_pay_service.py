@@ -298,32 +298,52 @@ class WasherPayService:
             return True
         return False
 
-    def _line_pay_gross(
+    def _payable_service_lines(
         self,
-        row: TicketBranchOfficeService,
-        *,
-        ticket: Ticket,
         ticket_rows: list[TicketBranchOfficeService],
-    ) -> int:
-        amount = TicketLineService._resolved_line_total(row)
-        if amount > 0:
-            return amount
-        payable = [r for r in ticket_rows if self._is_payable_service_line(r)]
-        if len(payable) != 1 or payable[0].id != row.id:
-            return 0
-        pricing = self._tickets._ticket_pricing(ticket.id, ticket)
-        return max(0, pricing["total"])
+    ) -> list[TicketBranchOfficeService]:
+        return [row for row in ticket_rows if self._is_payable_service_line(row)]
 
-    def _line_pay_net(
+    def _line_gross_amounts_for_ticket(
         self,
-        row: TicketBranchOfficeService,
-        *,
         ticket: Ticket,
         ticket_rows: list[TicketBranchOfficeService],
-    ) -> int:
+    ) -> dict[int, int]:
+        """Gross per service line; avoids counting the full ticket on every line."""
+        payable = self._payable_service_lines(ticket_rows)
+        if not payable or ticket.id is None:
+            return {}
+
+        pricing = self._tickets._ticket_pricing(ticket.id, ticket)
+        ticket_subtotal = max(0, pricing["subtotal"])
+        ticket_total = max(0, pricing["total"])
+
+        if len(payable) == 1:
+            row = payable[0]
+            line_id = row.id or 0
+            gross = max(0, TicketLineService._resolved_line_total(row))
+            if gross <= 0:
+                gross = ticket_total
+            return {line_id: gross}
+
+        raw: dict[int, int] = {}
+        for row in payable:
+            raw[row.id or 0] = max(0, TicketLineService._resolved_line_total(row))
+
+        total_raw = sum(raw.values())
+        if total_raw <= 0:
+            share = round_pesos(Decimal(ticket_subtotal) / Decimal(len(payable)))
+            return {row.id or 0: share for row in payable}
+
+        if total_raw > ticket_subtotal:
+            share = round_pesos(Decimal(ticket_subtotal) / Decimal(len(payable)))
+            return {row.id or 0: share for row in payable}
+
+        return raw
+
+    def _gross_to_net(self, gross: int, *, ticket: Ticket) -> int:
         """Net line amount (subtotal, sin IVA) for washer commission."""
-        gross = self._line_pay_gross(row, ticket=ticket, ticket_rows=ticket_rows)
-        if gross <= 0:
+        if gross <= 0 or ticket.id is None:
             return 0
         pricing = self._tickets._ticket_pricing(ticket.id, ticket)
         ticket_subtotal = pricing["subtotal"]
@@ -379,10 +399,14 @@ class WasherPayService:
             if not line_rows:
                 continue
 
+            gross_by_line = self._line_gross_amounts_for_ticket(ticket, line_rows)
             for line in line_rows:
                 if not self._is_payable_service_line(line):
                     continue
-                line_net = self._line_pay_net(line, ticket=ticket, ticket_rows=line_rows)
+                gross = gross_by_line.get(line.id or 0, 0)
+                if gross <= 0:
+                    continue
+                line_net = self._gross_to_net(gross, ticket=ticket)
                 if line_net <= 0:
                     continue
                 yield line, ticket, line_rows, line_net
@@ -581,6 +605,8 @@ class WasherPayService:
                         label=service_label,
                         description=" · ".join(description_parts),
                         base_amount=ctx.attributed_net,
+                        line_gross_net=ctx.full_line_net,
+                        group_member_count=ctx.group_member_count,
                         percentage=pct_display,
                         percentage_scope="group_average",
                         percentage_label="% promedio del grupo",
@@ -600,6 +626,8 @@ class WasherPayService:
                     label=service_label,
                     description=" · ".join(description_parts),
                     base_amount=ctx.attributed_net,
+                    line_gross_net=ctx.full_line_net,
+                    group_member_count=None,
                     percentage=effective_pct_display,
                     percentage_scope="day",
                     percentage_label="% del día",
@@ -690,8 +718,13 @@ class WasherPayService:
             washer_id=washer_id,
             day=day,
         )
+        line_contexts = self._paid_line_contexts_for_washer(
+            branch_office_id=branch_office_id,
+            washer_id=washer_id,
+            day=day,
+        )
         ticket_lines = [line for line in detail_lines if line.kind == "ticket"]
-        daily_sales = sum(line.base_amount for line in ticket_lines)
+        daily_sales = sum(ctx.attributed_net for ctx in line_contexts)
         goal_amount = self._parse_goal_amount(
             assignment.daily_goal if assignment else None,
         )
