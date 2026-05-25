@@ -22,6 +22,9 @@ class WasherPaySummaryResponse(BaseModel):
     amount: int = Field(ge=0)
 
 
+WasherPayPercentageScope = Literal["day", "group_average"]
+
+
 class WasherPayDetailLine(BaseModel):
     kind: str
     ticket_id: str | None = None
@@ -29,6 +32,9 @@ class WasherPayDetailLine(BaseModel):
     description: str
     base_amount: int = Field(ge=0)
     percentage: str | None = None
+    percentage_scope: WasherPayPercentageScope = "day"
+    percentage_label: str | None = None
+    day_percentage: str | None = None
     amount: int = Field(ge=0)
 
 

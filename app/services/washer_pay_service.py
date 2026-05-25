@@ -273,11 +273,22 @@ class WasherPayService:
             payment_status=payment_status,
         )
 
-    def _ticket_washer_id(self, ticket_id: int, rows: list[TicketBranchOfficeService]) -> int | None:
-        for row in rows:
-            if row.washer_id is not None and row.washer_id > 0:
-                return row.washer_id
-        return self._lines.washer_id_for_ticket(ticket_id)
+    @staticmethod
+    def _line_attributed_washer_id(
+        line: TicketBranchOfficeService,
+        line_rows: list[TicketBranchOfficeService],
+    ) -> int | None:
+        """Washer credited for this line's net sales (not every line on the ticket)."""
+        if line.washer_id is not None and line.washer_id > 0:
+            return line.washer_id
+        unique = {
+            row.washer_id
+            for row in line_rows
+            if row.washer_id is not None and row.washer_id > 0
+        }
+        if len(unique) == 1:
+            return next(iter(unique))
+        return None
 
     @staticmethod
     def _is_payable_service_line(row: TicketBranchOfficeService) -> bool:
@@ -368,14 +379,13 @@ class WasherPayService:
             if not line_rows:
                 continue
 
-            ticket_washer_id = self._ticket_washer_id(ticket.id, line_rows)
             for line in line_rows:
                 if not self._is_payable_service_line(line):
                     continue
                 line_net = self._line_pay_net(line, ticket=ticket, ticket_rows=line_rows)
                 if line_net <= 0:
                     continue
-                yield line, ticket, line_rows, ticket_washer_id, line_net
+                yield line, ticket, line_rows, line_net
 
     def _branch_washer_attributed_sales(
         self,
@@ -384,11 +394,11 @@ class WasherPayService:
         day: date,
     ) -> dict[int, int]:
         sales: dict[int, int] = defaultdict(int)
-        for line, ticket, line_rows, ticket_washer_id, line_net in self._iter_branch_payable_lines(
+        for line, ticket, line_rows, line_net in self._iter_branch_payable_lines(
             branch_office_id=branch_office_id,
             day=day,
         ):
-            del ticket, line_rows
+            del ticket
             group_id = line.washer_daily_group_id
             if group_id is not None and group_id > 0:
                 member_ids = self._washer_groups.member_ids_for_group(group_id)
@@ -398,10 +408,8 @@ class WasherPayService:
                 for member_id in member_ids:
                     sales[member_id] += share
                 continue
-            line_washer_id = (
-                line.washer_id if line.washer_id and line.washer_id > 0 else ticket_washer_id
-            )
-            if line_washer_id is not None and line_washer_id > 0:
+            line_washer_id = self._line_attributed_washer_id(line, line_rows)
+            if line_washer_id is not None:
                 sales[line_washer_id] += line_net
         return dict(sales)
 
@@ -441,7 +449,7 @@ class WasherPayService:
         contexts: list[_WasherPayLineContext] = []
         seen: set[tuple[int, int]] = set()
 
-        for line, ticket, line_rows, ticket_washer_id, line_net in self._iter_branch_payable_lines(
+        for line, ticket, line_rows, line_net in self._iter_branch_payable_lines(
             branch_office_id=branch_office_id,
             day=day,
         ):
@@ -471,9 +479,7 @@ class WasherPayService:
                 )
                 continue
 
-            line_washer_id = (
-                line.washer_id if line.washer_id and line.washer_id > 0 else ticket_washer_id
-            )
+            line_washer_id = self._line_attributed_washer_id(line, line_rows)
             if line_washer_id != washer_id:
                 continue
             key = (ticket.id or 0, line.id or 0)
@@ -526,11 +532,11 @@ class WasherPayService:
             washer_id=washer_id,
             day=day,
         )
+        daily_sales = sum(ctx.attributed_net for ctx in line_contexts)
         sales_map = self._branch_washer_attributed_sales(
             branch_office_id=branch_office_id,
             day=day,
         )
-        daily_sales = sales_map.get(washer_id, 0)
         ticket_ids = {ctx.ticket.id for ctx in line_contexts if ctx.ticket.id is not None}
 
         base_pct = self._percentage_for_date(assignment, day=day)
@@ -568,11 +574,25 @@ class WasherPayService:
                 description_parts.append(
                     f"Grupo {ctx.group_name} ({ctx.group_member_count} lav.)",
                 )
-            else:
-                pct_display = effective_pct_display
-                commission = round_pesos(
-                    Decimal(ctx.attributed_net) * effective_pct / Decimal("100"),
+                detail_lines.append(
+                    WasherPayDetailLine(
+                        kind="ticket",
+                        ticket_id=ticket_id,
+                        label=service_label,
+                        description=" · ".join(description_parts),
+                        base_amount=ctx.attributed_net,
+                        percentage=pct_display,
+                        percentage_scope="group_average",
+                        percentage_label="% promedio del grupo",
+                        day_percentage=effective_pct_display or None,
+                        amount=commission,
+                    ),
                 )
+                continue
+
+            commission = round_pesos(
+                Decimal(ctx.attributed_net) * effective_pct / Decimal("100"),
+            )
             detail_lines.append(
                 WasherPayDetailLine(
                     kind="ticket",
@@ -580,7 +600,10 @@ class WasherPayService:
                     label=service_label,
                     description=" · ".join(description_parts),
                     base_amount=ctx.attributed_net,
-                    percentage=pct_display,
+                    percentage=effective_pct_display,
+                    percentage_scope="day",
+                    percentage_label="% del día",
+                    day_percentage=None,
                     amount=commission,
                 ),
             )
@@ -668,11 +691,7 @@ class WasherPayService:
             day=day,
         )
         ticket_lines = [line for line in detail_lines if line.kind == "ticket"]
-        sales_map = self._branch_washer_attributed_sales(
-            branch_office_id=branch_office_id,
-            day=day,
-        )
-        daily_sales = sales_map.get(washer_id, 0)
+        daily_sales = sum(line.base_amount for line in ticket_lines)
         goal_amount = self._parse_goal_amount(
             assignment.daily_goal if assignment else None,
         )
