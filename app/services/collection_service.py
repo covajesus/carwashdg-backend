@@ -1,3 +1,4 @@
+import calendar
 from copy import deepcopy
 from datetime import date
 
@@ -5,11 +6,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.branch_scope import branch_scope_for_user
-from app.core.datetime_utils import business_now
+from app.core.datetime_utils import business_now, business_today
 from app.core.pricing import ticket_totals_from_subtotal
 from app.models.branch_collection import BranchCollection
 from app.models.branch_office import BranchOffice
-from app.schemas.collection import CollectionDayResponse, CollectionUpsert
+from app.schemas.collection import (
+    CollectionCalendarDay,
+    CollectionCalendarResponse,
+    CollectionDayResponse,
+    CollectionUpsert,
+)
 from app.schemas.user import UserPublic
 
 
@@ -195,3 +201,73 @@ class CollectionService:
         collection_date: date,
     ) -> dict[str, int]:
         return deepcopy(date_buckets.get(collection_date.isoformat(), empty_earnings_bucket()))
+
+    @staticmethod
+    def day_is_recorded(tickets: dict[str, int], manual_gross: int) -> bool:
+        combined = deepcopy(tickets)
+        apply_manual_gross_to_bucket(combined, manual_gross)
+        return combined["ticket_count"] > 0 or combined["total"] > 0
+
+    def build_calendar_month(
+        self,
+        user: UserPublic,
+        branch_office_id: int,
+        *,
+        year: int,
+        month: int,
+        tickets_date_buckets: dict[str, dict[str, int]],
+    ) -> CollectionCalendarResponse:
+        if month < 1 or month > 12:
+            raise CollectionValidationError("Mes no válido")
+        if year < 2000 or year > 2100:
+            raise CollectionValidationError("Año no válido")
+
+        branch = self._validate_branch(branch_office_id)
+        self._assert_branch_access(user, branch_office_id)
+
+        last_day = calendar.monthrange(year, month)[1]
+        today = business_today()
+
+        manual_by_day: dict[str, int] = {}
+        for row in self.list_manual_for_branch(branch_office_id):
+            if row.collection_date is None:
+                continue
+            if row.collection_date.year != year or row.collection_date.month != month:
+                continue
+            manual_by_day[row.collection_date.isoformat()] = max(0, int(row.gross_amount or 0))
+
+        days: list[CollectionCalendarDay] = []
+        for day_num in range(1, last_day + 1):
+            day = date(year, month, day_num)
+            day_key = day.isoformat()
+            tickets = self.tickets_bucket_for_date(tickets_date_buckets, day)
+            manual = manual_by_day.get(day_key, 0)
+            combined = deepcopy(tickets)
+            apply_manual_gross_to_bucket(combined, manual)
+
+            if day > today:
+                status = "future"
+            elif self.day_is_recorded(tickets, manual):
+                status = "ok"
+            else:
+                status = "missing"
+
+            days.append(
+                CollectionCalendarDay(
+                    date=day,
+                    status=status,
+                    has_tickets=tickets["ticket_count"] > 0,
+                    has_manual=manual > 0,
+                    tickets_total=tickets["total"],
+                    manual_gross_amount=manual,
+                    total=combined["total"],
+                ),
+            )
+
+        return CollectionCalendarResponse(
+            branch_office_id=str(branch_office_id),
+            branch_name=branch.branch_office,
+            year=year,
+            month=month,
+            days=days,
+        )
