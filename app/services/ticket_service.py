@@ -753,18 +753,42 @@ class TicketService:
             self.db.rollback()
             raise
 
+    def _apply_ticket_gross_amount(self, row: Ticket, gross_amount: int) -> None:
+        if row.payment_type_id in (PAYMENT_TYPE_EFECTIVO, PAYMENT_TYPE_TRANSBANK):
+            raise TicketValidationError("No se puede cambiar el monto de un ticket ya cobrado")
+        gross = round_pesos(gross_amount)
+        if gross <= 0:
+            raise TicketValidationError("El monto debe ser un entero mayor a 0")
+        apply_iva = self._infer_apply_iva_from_row(row)
+        pricing = ticket_totals_from_subtotal(gross, apply_iva=apply_iva)
+        row.subtotal = str(pricing["subtotal"])
+        row.tax = str(pricing["tax"])
+        row.total = str(pricing["total"])
+
     def update(self, ticket_id: int, data: TicketUpdate, user: UserPublic) -> TicketPublic:
         row = self._get_visible_ticket(ticket_id, user)
 
         patch = data.model_dump(exclude_unset=True)
-        for key, value in patch.items():
-            if key == "license_plate_id" and value is not None:
-                value = value.strip() or None
-            if key == "photo_url" and value is not None:
-                value = value.strip() or None
-            if key == "tip" and value is not None:
-                value = value.strip() or None
-            setattr(row, key, value)
+        if not patch:
+            return self.to_public(row)
+
+        if user.role == "admin":
+            allowed = {"gross_amount", "status_id"}
+            disallowed = set(patch.keys()) - allowed
+            if disallowed:
+                raise TicketValidationError("Solo puede modificar el monto o el estatus del ticket")
+            if "gross_amount" in patch:
+                self._apply_ticket_gross_amount(row, patch["gross_amount"])
+            if "status_id" in patch:
+                row.status_id = patch["status_id"]
+        elif user.role == "manager":
+            disallowed = set(patch.keys()) - {"status_id"}
+            if disallowed:
+                raise TicketValidationError("No tiene permiso para modificar este ticket")
+            if "status_id" in patch:
+                row.status_id = patch["status_id"]
+        else:
+            raise TicketValidationError("No tiene permiso para modificar tickets")
 
         row.updated_date = self._now()
         self.db.commit()

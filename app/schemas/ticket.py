@@ -41,6 +41,8 @@ class TicketCreate(BaseModel):
 
 
 class TicketUpdate(BaseModel):
+    """Administrador: solo `gross_amount`. Gerente: solo `status_id` (p. ej. No pagado)."""
+
     customer_id: int | None = None
     car_type_id: int | None = None
     license_plate_id: str | None = Field(default=None, max_length=255)
@@ -48,6 +50,7 @@ class TicketUpdate(BaseModel):
     payment_type_id: int | None = None
     status_id: int | None = None
     tip: str | None = Field(default=None, max_length=255)
+    gross_amount: int | None = Field(default=None, ge=1)
 
 
 class TicketCheckout(BaseModel):
