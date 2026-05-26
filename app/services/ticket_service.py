@@ -28,6 +28,7 @@ from app.schemas.ticket import (
 )
 from app.schemas.user import UserPublic
 from app.services.raffle_service import RaffleService, RaffleValidationError
+from app.services.recaudacion_service import RecaudacionService, empty_earnings_bucket
 from app.services.ticket_line_service import TicketLineService, TicketLineValidationError
 from app.core.branch_scope import branch_scope_for_user
 
@@ -393,9 +394,18 @@ class TicketService:
             return data.needs_tax_receipt
         return False
 
-    def _to_list_item(self, row: Ticket) -> TicketListItem:
+    def _to_list_item(
+        self,
+        row: Ticket,
+        *,
+        assignee: tuple[str, str] | None = None,
+    ) -> TicketListItem:
         pricing = self._ticket_pricing(row.id, row)
         created = datetime_to_iso(row.added_date) or ""
+        assignee_kind: str | None = None
+        assignee_label: str | None = None
+        if assignee is not None:
+            assignee_kind, assignee_label = assignee
         return TicketListItem(
             id=str(row.id),
             folio=f"T-{row.id}",
@@ -410,11 +420,19 @@ class TicketService:
                 str(row.payment_type_id) if row.payment_type_id else None
             ),
             statusId=str(row.status_id) if row.status_id is not None else None,
+            assigneeKind=assignee_kind,
+            assigneeLabel=assignee_label,
         )
 
     def list_for_user(self, user: UserPublic) -> list[TicketListItem]:
         stmt = self._list_stmt_for_user(user)
-        return [self._to_list_item(row) for row in self.db.scalars(stmt).all()]
+        rows = self.db.scalars(stmt).all()
+        ticket_ids = [int(row.id) for row in rows if row.id is not None]
+        assignees = self._lines.assignee_labels_for_ticket_ids(ticket_ids)
+        return [
+            self._to_list_item(row, assignee=assignees.get(int(row.id)) if row.id else None)
+            for row in rows
+        ]
 
     def summary_for_user(self, user: UserPublic) -> TicketSummaryResponse:
         stmt = self._list_stmt_for_user(user)
@@ -438,6 +456,48 @@ class TicketService:
             inProcessCount=in_process_count,
             paidCount=paid_count,
         )
+
+    def ticket_earnings_date_buckets(
+        self,
+        user: UserPublic,
+        branch_office_id: int,
+    ) -> dict[str, dict[str, int]]:
+        scope = self._branch_scope_for_user(user)
+        if scope == 0:
+            raise TicketValidationError("No tiene sucursal asignada")
+
+        if scope is not None and scope != branch_office_id:
+            raise TicketValidationError("No puede consultar otra sucursal")
+
+        if branch_office_id != 0:
+            branch = self.db.get(BranchOffice, branch_office_id)
+            if branch is None or not branch.is_active:
+                raise TicketValidationError("La sucursal no existe")
+
+        buckets: dict[str, dict[str, int]] = defaultdict(empty_earnings_bucket)
+
+        stmt = self._list_stmt_for_user(user)
+        for row in self.db.scalars(stmt).all():
+            if row.id is None:
+                continue
+            resolved_branch = self._resolve_branch_office_id_for_ticket(row.id)
+            bucket_key = resolved_branch if resolved_branch is not None else 0
+            if bucket_key != branch_office_id:
+                continue
+            if not self.ticket_is_collected(row):
+                continue
+
+            revenue_day = self.ticket_revenue_day(row)
+            day_key = revenue_day.isoformat() if revenue_day is not None else "sin-fecha"
+
+            pricing = self._ticket_pricing(row.id, row)
+            bucket = buckets[day_key]
+            bucket["ticket_count"] += 1
+            bucket["subtotal"] += pricing["subtotal"]
+            bucket["iva"] += pricing["iva"]
+            bucket["total"] += pricing["total"]
+
+        return dict(buckets)
 
     def earnings_by_branch(
         self,
@@ -487,6 +547,11 @@ class TicketService:
             bucket["subtotal"] += pricing["subtotal"]
             bucket["iva"] += pricing["iva"]
             bucket["total"] += pricing["total"]
+
+        RecaudacionService(self.db).merge_into_branch_buckets(
+            buckets,
+            branch_office_id=filter_branch_id,
+        )
 
         items: list[BranchEarningsItem] = []
         for branch_key, totals in buckets.items():
@@ -539,30 +604,8 @@ class TicketService:
                 raise TicketValidationError("La sucursal no existe")
             branch_name = branch.branch_office
 
-        buckets: dict[str, dict[str, int]] = defaultdict(
-            lambda: {"ticket_count": 0, "subtotal": 0, "iva": 0, "total": 0},
-        )
-
-        stmt = self._list_stmt_for_user(user)
-        for row in self.db.scalars(stmt).all():
-            if row.id is None:
-                continue
-            resolved_branch = self._resolve_branch_office_id_for_ticket(row.id)
-            bucket_key = resolved_branch if resolved_branch is not None else 0
-            if bucket_key != branch_office_id:
-                continue
-            if not self.ticket_is_collected(row):
-                continue
-
-            revenue_day = self.ticket_revenue_day(row)
-            day_key = revenue_day.isoformat() if revenue_day is not None else "sin-fecha"
-
-            pricing = self._ticket_pricing(row.id, row)
-            bucket = buckets[day_key]
-            bucket["ticket_count"] += 1
-            bucket["subtotal"] += pricing["subtotal"]
-            bucket["iva"] += pricing["iva"]
-            bucket["total"] += pricing["total"]
+        buckets = self.ticket_earnings_date_buckets(user, branch_office_id)
+        RecaudacionService(self.db).merge_into_date_buckets(buckets, branch_office_id)
 
         date_items: list[BranchEarningsByDateItem] = []
         for day_key, totals in buckets.items():

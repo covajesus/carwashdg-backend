@@ -1,12 +1,14 @@
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.datetime_utils import business_now, datetime_to_iso
 from app.core.pricing import round_pesos
 from app.models.service import Service
 from app.models.ticket_branch_office_service import TicketBranchOfficeService
+from app.models.user import User
+from app.models.washer_daily_group import WasherDailyGroup
 from app.schemas.ticket import TicketServiceLine
 from app.schemas.ticket_branch_office_service import (
     TicketBranchOfficeServiceCreate,
@@ -131,6 +133,74 @@ class TicketLineService:
 
     def washer_id_for_ticket(self, ticket_id: int) -> int | None:
         return self._default_washer_for_ticket(ticket_id)
+
+    def assignee_labels_for_ticket_ids(
+        self,
+        ticket_ids: list[int],
+    ) -> dict[int, tuple[str, str]]:
+        """ticket_id → (kind, label) where kind is washer or group."""
+        if not ticket_ids:
+            return {}
+
+        stmt = (
+            self._active_filter(select(TicketBranchOfficeService))
+            .where(
+                TicketBranchOfficeService.ticket_id.in_(ticket_ids),
+                or_(
+                    TicketBranchOfficeService.washer_id.isnot(None),
+                    TicketBranchOfficeService.washer_daily_group_id.isnot(None),
+                ),
+            )
+            .order_by(
+                TicketBranchOfficeService.ticket_id,
+                TicketBranchOfficeService.added_date,
+                TicketBranchOfficeService.id,
+            )
+        )
+
+        assignment_by_ticket: dict[int, TicketBranchOfficeService] = {}
+        for row in self.db.scalars(stmt).all():
+            tid = row.ticket_id
+            if tid is None or tid in assignment_by_ticket:
+                continue
+            assignment_by_ticket[tid] = row
+
+        washer_ids = {
+            row.washer_id
+            for row in assignment_by_ticket.values()
+            if row.washer_id is not None and row.washer_daily_group_id is None
+        }
+        group_ids = {
+            row.washer_daily_group_id
+            for row in assignment_by_ticket.values()
+            if row.washer_daily_group_id is not None
+        }
+
+        washer_names: dict[int, str] = {}
+        if washer_ids:
+            for user in self.db.scalars(select(User).where(User.id.in_(washer_ids))).all():
+                if user.id is not None:
+                    washer_names[int(user.id)] = (
+                        user.full_name.strip() or f"Lavador #{user.id}"
+                    )
+
+        group_names: dict[int, str] = {}
+        if group_ids:
+            for group in self.db.scalars(
+                select(WasherDailyGroup).where(WasherDailyGroup.id.in_(group_ids)),
+            ).all():
+                if group.id is not None:
+                    group_names[int(group.id)] = group.name.strip() or f"Grupo #{group.id}"
+
+        result: dict[int, tuple[str, str]] = {}
+        for tid, row in assignment_by_ticket.items():
+            if row.washer_daily_group_id is not None:
+                gid = int(row.washer_daily_group_id)
+                result[tid] = ("group", group_names.get(gid, f"Grupo #{gid}"))
+            elif row.washer_id is not None:
+                wid = int(row.washer_id)
+                result[tid] = ("washer", washer_names.get(wid, f"Lavador #{wid}"))
+        return result
 
     def assign_washer_to_ticket(
         self,
