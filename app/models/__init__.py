@@ -13,7 +13,7 @@ from app.models.status import Status
 from app.models.ticket import Ticket
 from app.models.ticket_branch_office_service import TicketBranchOfficeService
 from app.models.expense import Expense
-from app.models.branch_recaudacion import BranchRecaudacion
+from app.models.branch_collection import BranchCollection
 from app.models.manager_cash_closure import ManagerCashClosure
 from app.models.user import User
 from app.models.washer_daily_group import WasherDailyGroup, WasherDailyGroupMember
@@ -29,7 +29,7 @@ __all__ = [
     "Configuration",
     "Customer",
     "Expense",
-    "BranchRecaudacion",
+    "BranchCollection",
     "Rol",
     "Service",
     "Slider",

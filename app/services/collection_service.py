@@ -7,17 +7,17 @@ from sqlalchemy.orm import Session
 from app.core.branch_scope import branch_scope_for_user
 from app.core.datetime_utils import business_now
 from app.core.pricing import ticket_totals_from_subtotal
+from app.models.branch_collection import BranchCollection
 from app.models.branch_office import BranchOffice
-from app.models.branch_recaudacion import BranchRecaudacion
-from app.schemas.recaudacion import RecaudacionDayResponse, RecaudacionUpsert
+from app.schemas.collection import CollectionDayResponse, CollectionUpsert
 from app.schemas.user import UserPublic
 
 
-class RecaudacionValidationError(Exception):
+class CollectionValidationError(Exception):
     pass
 
 
-class RecaudacionForbiddenError(Exception):
+class CollectionForbiddenError(Exception):
     pass
 
 
@@ -36,7 +36,7 @@ def apply_manual_gross_to_bucket(bucket: dict[str, int], gross_amount: int) -> N
     bucket["total"] += pricing["total"]
 
 
-class RecaudacionService:
+class CollectionService:
     def __init__(self, db: Session) -> None:
         self.db = db
 
@@ -47,42 +47,42 @@ class RecaudacionService:
     def _assert_branch_access(self, user: UserPublic, branch_office_id: int) -> None:
         scope = branch_scope_for_user(user)
         if scope == 0:
-            raise RecaudacionValidationError("You have no branch assigned")
+            raise CollectionValidationError("You have no branch assigned")
         if scope is not None and scope != branch_office_id:
-            raise RecaudacionForbiddenError()
+            raise CollectionForbiddenError()
 
     def _validate_branch(self, branch_office_id: int) -> BranchOffice:
         if branch_office_id < 1:
-            raise RecaudacionValidationError("Invalid branch")
+            raise CollectionValidationError("Invalid branch")
         branch = self.db.get(BranchOffice, branch_office_id)
         if branch is None or not branch.is_active:
-            raise RecaudacionValidationError("Branch not found")
+            raise CollectionValidationError("Branch not found")
         return branch
 
     def _active_stmt(self):
-        return select(BranchRecaudacion).where(BranchRecaudacion.deleted_date.is_(None))
+        return select(BranchCollection).where(BranchCollection.deleted_date.is_(None))
 
     def get_manual_gross(self, branch_office_id: int, collection_date: date) -> int:
         row = self.db.scalars(
             self._active_stmt().where(
-                BranchRecaudacion.branch_office_id == branch_office_id,
-                BranchRecaudacion.collection_date == collection_date,
+                BranchCollection.branch_office_id == branch_office_id,
+                BranchCollection.collection_date == collection_date,
             ),
         ).first()
         if row is None:
             return 0
         return max(0, int(row.gross_amount or 0))
 
-    def list_manual_for_branch(self, branch_office_id: int) -> list[BranchRecaudacion]:
+    def list_manual_for_branch(self, branch_office_id: int) -> list[BranchCollection]:
         return list(
             self.db.scalars(
                 self._active_stmt().where(
-                    BranchRecaudacion.branch_office_id == branch_office_id,
+                    BranchCollection.branch_office_id == branch_office_id,
                 ),
             ).all(),
         )
 
-    def list_manual_all(self) -> list[BranchRecaudacion]:
+    def list_manual_all(self) -> list[BranchCollection]:
         return list(self.db.scalars(self._active_stmt()).all())
 
     def merge_into_date_buckets(
@@ -104,8 +104,7 @@ class RecaudacionService:
         *,
         branch_office_id: int | None = None,
     ) -> None:
-        rows = self.list_manual_all()
-        for row in rows:
+        for row in self.list_manual_all():
             if row.gross_amount <= 0:
                 continue
             key = int(row.branch_office_id)
@@ -120,17 +119,17 @@ class RecaudacionService:
         user: UserPublic,
         branch_office_id: int,
         collection_date: date,
-        data: RecaudacionUpsert,
-    ) -> RecaudacionDayResponse:
-        branch = self._validate_branch(branch_office_id)
+        data: CollectionUpsert,
+    ) -> None:
+        self._validate_branch(branch_office_id)
         self._assert_branch_access(user, branch_office_id)
 
         gross = int(data.gross_amount)
         now = self._now()
         row = self.db.scalars(
             self._active_stmt().where(
-                BranchRecaudacion.branch_office_id == branch_office_id,
-                BranchRecaudacion.collection_date == collection_date,
+                BranchCollection.branch_office_id == branch_office_id,
+                BranchCollection.collection_date == collection_date,
             ),
         ).first()
 
@@ -140,15 +139,16 @@ class RecaudacionService:
                 row.updated_date = now
                 self.db.commit()
         elif row is None:
-            row = BranchRecaudacion(
-                branch_office_id=branch_office_id,
-                collection_date=collection_date,
-                gross_amount=gross,
-                added_date=now,
-                updated_date=now,
-                deleted_date=None,
+            self.db.add(
+                BranchCollection(
+                    branch_office_id=branch_office_id,
+                    collection_date=collection_date,
+                    gross_amount=gross,
+                    added_date=now,
+                    updated_date=now,
+                    deleted_date=None,
+                ),
             )
-            self.db.add(row)
             self.db.commit()
         else:
             row.gross_amount = gross
@@ -163,7 +163,7 @@ class RecaudacionService:
         *,
         branch_name: str | None = None,
         tickets_bucket: dict[str, int] | None = None,
-    ) -> RecaudacionDayResponse:
+    ) -> CollectionDayResponse:
         self._assert_branch_access(user, branch_office_id)
         if branch_name is None:
             branch = self._validate_branch(branch_office_id)
@@ -174,7 +174,7 @@ class RecaudacionService:
         combined = deepcopy(tickets)
         apply_manual_gross_to_bucket(combined, manual_gross)
 
-        return RecaudacionDayResponse(
+        return CollectionDayResponse(
             branch_office_id=str(branch_office_id),
             branch_name=branch_name,
             collection_date=collection_date,

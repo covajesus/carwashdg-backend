@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS branch_recaudacion (
+CREATE TABLE IF NOT EXISTS branch_collections (
   id INT NOT NULL AUTO_INCREMENT,
   branch_office_id INT NOT NULL,
   collection_date DATE NOT NULL,
@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS branch_recaudacion (
   updated_date DATETIME NULL,
   deleted_date DATETIME NULL,
   PRIMARY KEY (id),
-  UNIQUE KEY uq_branch_recaudacion_branch_date (branch_office_id, collection_date),
-  KEY idx_branch_recaudacion_branch (branch_office_id),
-  KEY idx_branch_recaudacion_date (collection_date)
+  UNIQUE KEY uq_branch_collections_branch_date (branch_office_id, collection_date),
+  KEY idx_branch_collections_branch (branch_office_id),
+  KEY idx_branch_collections_date (collection_date)
 );

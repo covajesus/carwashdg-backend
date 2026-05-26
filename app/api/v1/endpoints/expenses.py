@@ -21,9 +21,14 @@ router = APIRouter(prefix="/expenses", tags=["expenses"])
 
 
 @router.get("/types", response_model=ExpenseTypesResponse)
-def list_expense_types(service: ExpenseServiceDep) -> ExpenseTypesResponse:
+def list_expense_types(
+    current_user: CurrentUserDep,
+    service: ExpenseServiceDep,
+) -> ExpenseTypesResponse:
     return ExpenseTypesResponse(
-        items=[ExpenseTypeOption(**row) for row in service.list_type_options()],
+        items=[
+            ExpenseTypeOption(**row) for row in service.list_type_options_for_user(current_user)
+        ],
     )
 
 

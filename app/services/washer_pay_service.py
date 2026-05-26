@@ -573,10 +573,10 @@ class WasherPayService:
         branch_office_id: int,
         washer_id: int,
         day: date,
-    ) -> tuple[int, int, list[WasherPayDetailLine]]:
+    ) -> tuple[int, int, list[WasherPayDetailLine], int]:
         assignment = self._branch_washer.get_active_assignment_for_washer(washer_id)
         if assignment is None:
-            return 0, 0, []
+            return 0, 0, [], 0
 
         line_contexts = self._paid_line_contexts_for_washer(
             branch_office_id=branch_office_id,
@@ -696,6 +696,8 @@ class WasherPayService:
                 washer_id=washer_id,
                 day=day,
             )
+            if ticket_count <= 0 and amount <= 0:
+                continue
             assignment = self._branch_washer.get_active_assignment_for_washer(washer_id)
             applied_pct = (
                 self._format_percentage_display(

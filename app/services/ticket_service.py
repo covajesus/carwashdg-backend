@@ -28,7 +28,7 @@ from app.schemas.ticket import (
 )
 from app.schemas.user import UserPublic
 from app.services.raffle_service import RaffleService, RaffleValidationError
-from app.services.recaudacion_service import RecaudacionService, empty_earnings_bucket
+from app.services.collection_service import CollectionService, empty_earnings_bucket
 from app.services.ticket_line_service import TicketLineService, TicketLineValidationError
 from app.core.branch_scope import branch_scope_for_user
 
@@ -175,7 +175,10 @@ class TicketService:
         return self._status_label_is_open(status_text)
 
     def ticket_revenue_day(self, row: Ticket) -> date | None:
-        """Business day for earnings and washer pay (uses checkout date when collected)."""
+        """Business day for earnings and washer pay (checkout/payment day when collected)."""
+        if row.payment_type_id in (PAYMENT_TYPE_EFECTIVO, PAYMENT_TYPE_TRANSBANK):
+            if row.updated_date is not None:
+                return business_local_date(row.updated_date)
         if self.ticket_is_collected(row) and row.updated_date is not None:
             return business_local_date(row.updated_date)
         return business_local_date(row.added_date)
@@ -406,6 +409,7 @@ class TicketService:
         assignee_label: str | None = None
         if assignee is not None:
             assignee_kind, assignee_label = assignee
+        revenue_day = self.ticket_revenue_day(row)
         return TicketListItem(
             id=str(row.id),
             folio=f"T-{row.id}",
@@ -422,6 +426,7 @@ class TicketService:
             statusId=str(row.status_id) if row.status_id is not None else None,
             assigneeKind=assignee_kind,
             assigneeLabel=assignee_label,
+            revenueDay=revenue_day.isoformat() if revenue_day is not None else None,
         )
 
     def list_for_user(self, user: UserPublic) -> list[TicketListItem]:
@@ -464,15 +469,15 @@ class TicketService:
     ) -> dict[str, dict[str, int]]:
         scope = self._branch_scope_for_user(user)
         if scope == 0:
-            raise TicketValidationError("No tiene sucursal asignada")
+            raise TicketValidationError("You have no branch assigned")
 
         if scope is not None and scope != branch_office_id:
-            raise TicketValidationError("No puede consultar otra sucursal")
+            raise TicketValidationError("You cannot view another branch")
 
         if branch_office_id != 0:
             branch = self.db.get(BranchOffice, branch_office_id)
             if branch is None or not branch.is_active:
-                raise TicketValidationError("La sucursal no existe")
+                raise TicketValidationError("Branch not found")
 
         buckets: dict[str, dict[str, int]] = defaultdict(empty_earnings_bucket)
 
@@ -524,7 +529,7 @@ class TicketService:
         if filter_branch_id is not None:
             branch = self.db.get(BranchOffice, filter_branch_id)
             if branch is None or not branch.is_active:
-                raise TicketValidationError("La sucursal no existe")
+                raise TicketValidationError("Branch not found")
 
         buckets: dict[int, dict[str, int]] = defaultdict(
             lambda: {"ticket_count": 0, "subtotal": 0, "iva": 0, "total": 0},
@@ -548,7 +553,7 @@ class TicketService:
             bucket["iva"] += pricing["iva"]
             bucket["total"] += pricing["total"]
 
-        RecaudacionService(self.db).merge_into_branch_buckets(
+        CollectionService(self.db).merge_into_branch_buckets(
             buckets,
             branch_office_id=filter_branch_id,
         )
@@ -591,21 +596,21 @@ class TicketService:
     ) -> TicketEarningsByBranchDateResponse:
         scope = self._branch_scope_for_user(user)
         if scope == 0:
-            raise TicketValidationError("No tiene sucursal asignada")
+            raise TicketValidationError("You have no branch assigned")
 
         if scope is not None and scope != branch_office_id:
-            raise TicketValidationError("No puede consultar otra sucursal")
+            raise TicketValidationError("You cannot view another branch")
 
         if branch_office_id == 0:
             branch_name = "Sin sucursal"
         else:
             branch = self.db.get(BranchOffice, branch_office_id)
             if branch is None or not branch.is_active:
-                raise TicketValidationError("La sucursal no existe")
+                raise TicketValidationError("Branch not found")
             branch_name = branch.branch_office
 
         buckets = self.ticket_earnings_date_buckets(user, branch_office_id)
-        RecaudacionService(self.db).merge_into_date_buckets(buckets, branch_office_id)
+        CollectionService(self.db).merge_into_date_buckets(buckets, branch_office_id)
 
         date_items: list[BranchEarningsByDateItem] = []
         for day_key, totals in buckets.items():

@@ -89,6 +89,7 @@ class TicketListItem(BaseModel):
     statusId: str | None = None
     assigneeLabel: str | None = None
     assigneeKind: str | None = None
+    revenueDay: str | None = None
 
 
 class TicketServiceLine(BaseModel):

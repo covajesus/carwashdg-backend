@@ -3,11 +3,11 @@ from datetime import date
 from pydantic import BaseModel, Field
 
 
-class RecaudacionUpsert(BaseModel):
+class CollectionUpsert(BaseModel):
     gross_amount: int = Field(ge=0)
 
 
-class RecaudacionDayResponse(BaseModel):
+class CollectionDayResponse(BaseModel):
     branch_office_id: str
     branch_name: str
     collection_date: date

@@ -21,6 +21,9 @@ EXPENSE_TYPE_LABELS: dict[str, str] = {
     "otros": "Otros",
 }
 
+# Solo administradores pueden ver, crear o editar estos tipos.
+ADMIN_ONLY_EXPENSE_TYPES = frozenset({"arriendo"})
+
 class ExpenseNotFoundError(Exception):
     pass
 
@@ -49,6 +52,28 @@ class ExpenseService:
     @staticmethod
     def list_type_options() -> list[dict[str, str]]:
         return [{"id": key, "label": label} for key, label in EXPENSE_TYPE_LABELS.items()]
+
+    @staticmethod
+    def _user_is_admin(user: UserPublic) -> bool:
+        return branch_scope_for_user(user) is None
+
+    def list_type_options_for_user(self, user: UserPublic) -> list[dict[str, str]]:
+        options = self.list_type_options()
+        if self._user_is_admin(user):
+            return options
+        return [row for row in options if row["id"] not in ADMIN_ONLY_EXPENSE_TYPES]
+
+    def _assert_expense_visible_to_user(self, user: UserPublic, row: Expense) -> None:
+        if self._user_is_admin(user):
+            return
+        if row.expense_type.strip() in ADMIN_ONLY_EXPENSE_TYPES:
+            raise ExpenseNotFoundError()
+
+    def _reject_admin_only_type_for_user(self, user: UserPublic, expense_type: str) -> None:
+        if self._user_is_admin(user):
+            return
+        if expense_type in ADMIN_ONLY_EXPENSE_TYPES:
+            raise ExpenseValidationError("Tipo de gasto no válido")
 
     def _branch_name(self, branch_office_id: int | None) -> str | None:
         if branch_office_id is None or branch_office_id < 1:
@@ -147,7 +172,10 @@ class ExpenseService:
         if scope is not None:
             stmt = stmt.where(Expense.branch_office_id == scope)
 
-        return [self.to_public(row) for row in self.db.scalars(stmt).all()]
+        rows = list(self.db.scalars(stmt).all())
+        if not self._user_is_admin(user):
+            rows = [row for row in rows if row.expense_type.strip() not in ADMIN_ONLY_EXPENSE_TYPES]
+        return [self.to_public(row) for row in rows]
 
     def get_by_id_for_user(self, user: UserPublic, expense_id: int) -> ExpensePublic:
         row = self.db.scalars(
@@ -156,10 +184,12 @@ class ExpenseService:
         if row is None:
             raise ExpenseNotFoundError()
         self._assert_can_access(user, row)
+        self._assert_expense_visible_to_user(user, row)
         return self.to_public(row)
 
     def create(self, user: UserPublic, data: ExpenseCreate) -> ExpensePublic:
         expense_type = self._normalize_type(data.expense_type)
+        self._reject_admin_only_type_for_user(user, expense_type)
         photo_url = self._normalize_photo(data.photo_url)
         branch_office_id = self._resolve_branch_for_create(user, data.branchOfficeId)
         now = self._now()
@@ -183,9 +213,12 @@ class ExpenseService:
         if row is None or not row.is_active:
             raise ExpenseNotFoundError()
         self._assert_can_access(user, row)
+        self._assert_expense_visible_to_user(user, row)
 
         if data.expense_type is not None:
-            row.expense_type = self._normalize_type(data.expense_type)
+            expense_type = self._normalize_type(data.expense_type)
+            self._reject_admin_only_type_for_user(user, expense_type)
+            row.expense_type = expense_type
         if data.amount is not None:
             if data.amount < 1:
                 raise ExpenseValidationError("Indique un monto mayor a cero")
@@ -209,6 +242,7 @@ class ExpenseService:
         if row is None or not row.is_active:
             raise ExpenseNotFoundError()
         self._assert_can_access(user, row)
+        self._assert_expense_visible_to_user(user, row)
         now = self._now()
         row.deleted_date = now
         row.updated_date = now

@@ -1,17 +1,14 @@
 from datetime import date
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException
 
-from app.api.deps import CurrentUserDep, RecaudacionServiceDep, TicketServiceDep
-from app.schemas.recaudacion import RecaudacionDayResponse, RecaudacionUpsert
+from app.api.deps import CollectionServiceDep, CurrentUserDep, TicketServiceDep
+from app.schemas.collection import CollectionDayResponse, CollectionUpsert
 from app.schemas.ticket import ErrorResponse
-from app.services.recaudacion_service import (
-    RecaudacionForbiddenError,
-    RecaudacionValidationError,
-)
+from app.services.collection_service import CollectionForbiddenError, CollectionValidationError
 from app.services.ticket_service import TicketValidationError
 
-router = APIRouter(prefix="/recaudacion", tags=["recaudacion"])
+router = APIRouter(prefix="/collections", tags=["collections"])
 
 
 def _parse_date(value: str) -> date:
@@ -23,21 +20,21 @@ def _parse_date(value: str) -> date:
 
 @router.get(
     "/branch/{branch_office_id}/date/{collection_date}",
-    response_model=RecaudacionDayResponse,
+    response_model=CollectionDayResponse,
     responses={400: {"model": ErrorResponse}, 403: {"model": ErrorResponse}},
 )
-def get_recaudacion_day(
+def get_collection_day(
     branch_office_id: int,
     collection_date: str,
     current_user: CurrentUserDep,
     ticket_service: TicketServiceDep,
-    recaudacion_service: RecaudacionServiceDep,
-) -> RecaudacionDayResponse:
+    collection_service: CollectionServiceDep,
+) -> CollectionDayResponse:
     day = _parse_date(collection_date)
     try:
         buckets = ticket_service.ticket_earnings_date_buckets(current_user, branch_office_id)
-        tickets_bucket = recaudacion_service.tickets_bucket_for_date(buckets, day)
-        return recaudacion_service.build_day_response(
+        tickets_bucket = collection_service.tickets_bucket_for_date(buckets, day)
+        return collection_service.build_day_response(
             current_user,
             branch_office_id,
             day,
@@ -45,31 +42,31 @@ def get_recaudacion_day(
         )
     except TicketValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RecaudacionValidationError as exc:
+    except CollectionValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RecaudacionForbiddenError as exc:
+    except CollectionForbiddenError as exc:
         raise HTTPException(status_code=403, detail="Not authorized") from exc
 
 
 @router.put(
     "/branch/{branch_office_id}/date/{collection_date}",
-    response_model=RecaudacionDayResponse,
+    response_model=CollectionDayResponse,
     responses={400: {"model": ErrorResponse}, 403: {"model": ErrorResponse}},
 )
-def upsert_recaudacion_day(
+def upsert_collection_day(
     branch_office_id: int,
     collection_date: str,
-    body: RecaudacionUpsert,
+    body: CollectionUpsert,
     current_user: CurrentUserDep,
     ticket_service: TicketServiceDep,
-    recaudacion_service: RecaudacionServiceDep,
-) -> RecaudacionDayResponse:
+    collection_service: CollectionServiceDep,
+) -> CollectionDayResponse:
     day = _parse_date(collection_date)
     try:
-        recaudacion_service.upsert(current_user, branch_office_id, day, body)
+        collection_service.upsert(current_user, branch_office_id, day, body)
         buckets = ticket_service.ticket_earnings_date_buckets(current_user, branch_office_id)
-        tickets_bucket = recaudacion_service.tickets_bucket_for_date(buckets, day)
-        return recaudacion_service.build_day_response(
+        tickets_bucket = collection_service.tickets_bucket_for_date(buckets, day)
+        return collection_service.build_day_response(
             current_user,
             branch_office_id,
             day,
@@ -77,7 +74,7 @@ def upsert_recaudacion_day(
         )
     except TicketValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RecaudacionValidationError as exc:
+    except CollectionValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RecaudacionForbiddenError as exc:
+    except CollectionForbiddenError as exc:
         raise HTTPException(status_code=403, detail="Not authorized") from exc

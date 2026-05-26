@@ -6,8 +6,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
 
 
-class BranchRecaudacion(Base):
-    __tablename__ = "branch_recaudacion"
+class BranchCollection(Base):
+    __tablename__ = "branch_collections"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     branch_office_id: Mapped[int] = mapped_column(Integer, nullable=False)
