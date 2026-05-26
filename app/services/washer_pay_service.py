@@ -428,14 +428,41 @@ class WasherPayService:
                 member_ids = self._washer_groups.member_ids_for_group(group_id)
                 if not member_ids:
                     continue
-                share = round_pesos(Decimal(line_net) / Decimal(len(member_ids)))
+                base_avg = self._group_base_average_pct(member_ids, day=day)
+                credit = self._line_sales_credit(line_net, base_avg)
                 for member_id in member_ids:
-                    sales[member_id] += share
+                    sales[member_id] += credit
                 continue
             line_washer_id = self._line_attributed_washer_id(line, line_rows)
             if line_washer_id is not None:
-                sales[line_washer_id] += line_net
+                assignment = self._branch_washer.get_active_assignment_for_washer(line_washer_id)
+                if assignment is not None:
+                    pct = self._percentage_for_date(assignment, day=day)
+                    sales[line_washer_id] += self._line_sales_credit(line_net, pct)
         return dict(sales)
+
+    @staticmethod
+    def _line_sales_credit(line_net: int, pct: Decimal) -> int:
+        """Venta del día por línea: monto neto × % (del día o promedio del grupo)."""
+        if line_net <= 0 or pct <= 0:
+            return 0
+        return round_pesos(Decimal(line_net) * pct / Decimal("100"))
+
+    def _group_base_average_pct(self, member_ids: list[int], *, day: date) -> Decimal:
+        """Promedio del % base (lun–sáb. / domingo) sin extra por meta."""
+        if not member_ids:
+            return Decimal("0")
+        total = Decimal("0")
+        count = 0
+        for member_id in member_ids:
+            assignment = self._branch_washer.get_active_assignment_for_washer(member_id)
+            if assignment is None:
+                continue
+            total += self._percentage_for_date(assignment, day=day)
+            count += 1
+        if count == 0:
+            return Decimal("0")
+        return total / Decimal(count)
 
     def _group_average_effective_pct(
         self,
@@ -556,7 +583,6 @@ class WasherPayService:
             washer_id=washer_id,
             day=day,
         )
-        daily_sales = sum(ctx.attributed_net for ctx in line_contexts)
         sales_map = self._branch_washer_attributed_sales(
             branch_office_id=branch_office_id,
             day=day,
@@ -564,15 +590,25 @@ class WasherPayService:
         ticket_ids = {ctx.ticket.id for ctx in line_contexts if ctx.ticket.id is not None}
 
         base_pct = self._percentage_for_date(assignment, day=day)
+        prelim_daily_sales = 0
+        for ctx in line_contexts:
+            if ctx.group_id is not None:
+                member_ids = self._washer_groups.member_ids_for_group(ctx.group_id)
+                base_avg = self._group_base_average_pct(member_ids, day=day)
+                prelim_daily_sales += self._line_sales_credit(ctx.full_line_net, base_avg)
+            else:
+                prelim_daily_sales += self._line_sales_credit(ctx.full_line_net, base_pct)
+
         boost_pct = self._goal_percentage_boost(
             assignment,
             day=day,
-            daily_sales=daily_sales,
+            daily_sales=prelim_daily_sales,
         )
         effective_pct = base_pct + boost_pct
         effective_pct_display = self._format_percentage_display(effective_pct)
 
         detail_lines: list[WasherPayDetailLine] = []
+        daily_sales = 0
         for ctx in line_contexts:
             ticket_id = str(ctx.ticket.id) if ctx.ticket.id is not None else None
             plate = (ctx.ticket.license_plate_id or "").strip()
@@ -589,12 +625,11 @@ class WasherPayService:
                     sales_map=sales_map,
                 )
                 pct_display = self._format_percentage_display(avg_pct)
-                total_commission = round_pesos(
-                    Decimal(ctx.full_line_net) * avg_pct / Decimal("100"),
-                )
+                sales_credit = self._line_sales_credit(ctx.full_line_net, avg_pct)
                 commission = round_pesos(
-                    Decimal(total_commission) / Decimal(ctx.group_member_count),
+                    Decimal(sales_credit) / Decimal(ctx.group_member_count),
                 )
+                daily_sales += sales_credit
                 description_parts.append(
                     f"Grupo {ctx.group_name} ({ctx.group_member_count} lav.)",
                 )
@@ -604,7 +639,7 @@ class WasherPayService:
                         ticket_id=ticket_id,
                         label=service_label,
                         description=" · ".join(description_parts),
-                        base_amount=ctx.attributed_net,
+                        base_amount=sales_credit,
                         line_gross_net=ctx.full_line_net,
                         group_member_count=ctx.group_member_count,
                         percentage=pct_display,
@@ -616,28 +651,27 @@ class WasherPayService:
                 )
                 continue
 
-            commission = round_pesos(
-                Decimal(ctx.attributed_net) * effective_pct / Decimal("100"),
-            )
+            sales_credit = self._line_sales_credit(ctx.full_line_net, effective_pct)
+            daily_sales += sales_credit
             detail_lines.append(
                 WasherPayDetailLine(
                     kind="ticket",
                     ticket_id=ticket_id,
                     label=service_label,
                     description=" · ".join(description_parts),
-                    base_amount=ctx.attributed_net,
+                    base_amount=sales_credit,
                     line_gross_net=ctx.full_line_net,
                     group_member_count=None,
                     percentage=effective_pct_display,
                     percentage_scope="day",
                     percentage_label="% del día",
                     day_percentage=None,
-                    amount=commission,
+                    amount=sales_credit,
                 ),
             )
 
         total = sum(line.amount for line in detail_lines)
-        return total, len(ticket_ids), detail_lines
+        return total, len(ticket_ids), detail_lines, daily_sales
 
     def summary_by_branch_and_date(
         self,
@@ -655,19 +689,14 @@ class WasherPayService:
             day=day,
             washer_ids=washer_ids,
         )
-        sales_map = self._branch_washer_attributed_sales(
-            branch_office_id=branch_office_id,
-            day=day,
-        )
         items: list[WasherPaySummaryItem] = []
         for washer_id in washer_ids:
-            amount, ticket_count, _ = self._compute_washer_pay(
+            amount, ticket_count, _, daily_sales = self._compute_washer_pay(
                 branch_office_id=branch_office_id,
                 washer_id=washer_id,
                 day=day,
             )
             assignment = self._branch_washer.get_active_assignment_for_washer(washer_id)
-            daily_sales = sales_map.get(washer_id, 0)
             applied_pct = (
                 self._format_percentage_display(
                     self._effective_percentage(
@@ -713,18 +742,17 @@ class WasherPayService:
             raise WasherPayValidationError("El lavador no pertenece a esta sucursal")
 
         assignment = self._branch_washer.get_active_assignment_for_washer(washer_id)
-        amount, _, detail_lines = self._compute_washer_pay(
-            branch_office_id=branch_office_id,
-            washer_id=washer_id,
-            day=day,
-        )
-        line_contexts = self._paid_line_contexts_for_washer(
+        amount, _, detail_lines, daily_sales = self._compute_washer_pay(
             branch_office_id=branch_office_id,
             washer_id=washer_id,
             day=day,
         )
         ticket_lines = [line for line in detail_lines if line.kind == "ticket"]
-        daily_sales = sum(ctx.attributed_net for ctx in line_contexts)
+        line_contexts = self._paid_line_contexts_for_washer(
+            branch_office_id=branch_office_id,
+            washer_id=washer_id,
+            day=day,
+        )
         goal_amount = self._parse_goal_amount(
             assignment.daily_goal if assignment else None,
         )
@@ -738,10 +766,17 @@ class WasherPayService:
             daily_sales=daily_sales,
         )
         effective_pct = base_pct + boost_pct
-        base_commission = sum(
-            round_pesos(Decimal(line.base_amount) * base_pct / Decimal("100"))
-            for line in ticket_lines
-        )
+        base_commission = 0
+        for ctx in line_contexts:
+            if ctx.group_id is not None:
+                member_ids = self._washer_groups.member_ids_for_group(ctx.group_id)
+                base_avg = self._group_base_average_pct(member_ids, day=day)
+                pool = self._line_sales_credit(ctx.full_line_net, base_avg)
+                base_commission += round_pesos(
+                    Decimal(pool) / Decimal(ctx.group_member_count),
+                )
+            else:
+                base_commission += self._line_sales_credit(ctx.full_line_net, base_pct)
         goal_bonus = max(0, amount - base_commission)
         commission_total = base_commission
 
