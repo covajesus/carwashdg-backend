@@ -362,6 +362,9 @@ class WasherPayService:
             return f"Grupo #{group_id}"
         return row.name.strip() or f"Grupo #{group_id}"
 
+    def _group_member_ids_for_pay_day(self, group_id: int, *, day: date) -> list[int]:
+        return self._washer_groups.member_ids_for_group_on_date(group_id, day=day)
+
     def _iter_branch_payable_lines(
         self,
         *,
@@ -425,14 +428,13 @@ class WasherPayService:
             del ticket
             group_id = line.washer_daily_group_id
             if group_id is not None and group_id > 0:
-                member_ids = self._washer_groups.member_ids_for_group(group_id)
-                if not member_ids:
+                member_ids = self._group_member_ids_for_pay_day(group_id, day=day)
+                if member_ids:
+                    base_avg = self._group_base_average_pct(member_ids, day=day)
+                    credit = self._line_sales_credit(line_net, base_avg)
+                    for member_id in member_ids:
+                        sales[member_id] += credit
                     continue
-                base_avg = self._group_base_average_pct(member_ids, day=day)
-                credit = self._line_sales_credit(line_net, base_avg)
-                for member_id in member_ids:
-                    sales[member_id] += credit
-                continue
             line_washer_id = self._line_attributed_washer_id(line, line_rows)
             if line_washer_id is not None:
                 assignment = self._branch_washer.get_active_assignment_for_washer(line_washer_id)
@@ -506,29 +508,28 @@ class WasherPayService:
         ):
             group_id = line.washer_daily_group_id
             if group_id is not None and group_id > 0:
-                member_ids = self._washer_groups.member_ids_for_group(group_id)
-                if washer_id not in member_ids:
+                member_ids = self._group_member_ids_for_pay_day(group_id, day=day)
+                if member_ids:
+                    if washer_id not in member_ids:
+                        continue
+                    member_count = len(member_ids)
+                    key = (ticket.id or 0, line.id or 0)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    attributed_net = round_pesos(Decimal(line_net) / Decimal(member_count))
+                    contexts.append(
+                        _WasherPayLineContext(
+                            line=line,
+                            ticket=ticket,
+                            attributed_net=attributed_net,
+                            full_line_net=line_net,
+                            group_id=group_id,
+                            group_member_count=member_count,
+                            group_name=self._group_name(group_id),
+                        ),
+                    )
                     continue
-                member_count = len(member_ids)
-                if member_count <= 0:
-                    continue
-                key = (ticket.id or 0, line.id or 0)
-                if key in seen:
-                    continue
-                seen.add(key)
-                attributed_net = round_pesos(Decimal(line_net) / Decimal(member_count))
-                contexts.append(
-                    _WasherPayLineContext(
-                        line=line,
-                        ticket=ticket,
-                        attributed_net=attributed_net,
-                        full_line_net=line_net,
-                        group_id=group_id,
-                        group_member_count=member_count,
-                        group_name=self._group_name(group_id),
-                    ),
-                )
-                continue
 
             line_washer_id = self._line_attributed_washer_id(line, line_rows)
             if line_washer_id != washer_id:
@@ -593,7 +594,7 @@ class WasherPayService:
         prelim_daily_sales = 0
         for ctx in line_contexts:
             if ctx.group_id is not None:
-                member_ids = self._washer_groups.member_ids_for_group(ctx.group_id)
+                member_ids = self._group_member_ids_for_pay_day(ctx.group_id, day=day)
                 base_avg = self._group_base_average_pct(member_ids, day=day)
                 prelim_daily_sales += self._line_sales_credit(ctx.full_line_net, base_avg)
             else:
@@ -618,7 +619,7 @@ class WasherPayService:
                 description_parts.append(plate)
             description_parts.append(service_label)
             if ctx.group_id is not None:
-                member_ids = self._washer_groups.member_ids_for_group(ctx.group_id)
+                member_ids = self._group_member_ids_for_pay_day(ctx.group_id, day=day)
                 avg_pct = self._group_average_effective_pct(
                     member_ids=member_ids,
                     day=day,
@@ -771,7 +772,7 @@ class WasherPayService:
         base_commission = 0
         for ctx in line_contexts:
             if ctx.group_id is not None:
-                member_ids = self._washer_groups.member_ids_for_group(ctx.group_id)
+                member_ids = self._group_member_ids_for_pay_day(ctx.group_id, day=day)
                 base_avg = self._group_base_average_pct(member_ids, day=day)
                 pool = self._line_sales_credit(ctx.full_line_net, base_avg)
                 base_commission += round_pesos(

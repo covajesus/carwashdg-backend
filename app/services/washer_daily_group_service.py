@@ -358,3 +358,16 @@ class WasherDailyGroupService:
 
     def member_ids_for_group(self, group_id: int) -> list[int]:
         return self._member_washer_ids(group_id)
+
+    def member_ids_for_group_on_date(self, group_id: int, *, day: date) -> list[int]:
+        """
+        Miembros que reciben crédito en compensación del día `day`.
+        Vacío si el grupo no existe o su group_date no coincide (evita repartir
+        con la lista actual de un grupo de otro día o editada después).
+        """
+        row = self.db.get(WasherDailyGroup, group_id)
+        if row is None or row.deleted_date is not None:
+            return []
+        if row.group_date != day:
+            return []
+        return self._member_washer_ids(group_id)
