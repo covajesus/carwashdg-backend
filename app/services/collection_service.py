@@ -50,6 +50,11 @@ class CollectionService:
     def _now():
         return business_now()
 
+    @staticmethod
+    def _require_admin(user: UserPublic) -> None:
+        if branch_scope_for_user(user) is not None:
+            raise CollectionForbiddenError()
+
     def _assert_branch_access(self, user: UserPublic, branch_office_id: int) -> None:
         scope = branch_scope_for_user(user)
         if scope == 0:
@@ -127,6 +132,7 @@ class CollectionService:
         collection_date: date,
         data: CollectionUpsert,
     ) -> None:
+        self._require_admin(user)
         self._validate_branch(branch_office_id)
         self._assert_branch_access(user, branch_office_id)
 
@@ -170,6 +176,7 @@ class CollectionService:
         branch_name: str | None = None,
         tickets_bucket: dict[str, int] | None = None,
     ) -> CollectionDayResponse:
+        self._require_admin(user)
         self._assert_branch_access(user, branch_office_id)
         if branch_name is None:
             branch = self._validate_branch(branch_office_id)
@@ -217,6 +224,7 @@ class CollectionService:
         month: int,
         tickets_date_buckets: dict[str, dict[str, int]],
     ) -> CollectionCalendarResponse:
+        self._require_admin(user)
         if month < 1 or month > 12:
             raise CollectionValidationError("Mes no válido")
         if year < 2000 or year > 2100:
