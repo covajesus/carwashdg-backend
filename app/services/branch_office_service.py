@@ -26,6 +26,13 @@ class BranchOfficeService:
         return business_now()
 
     @staticmethod
+    def _management_type_id(row: BranchOffice) -> int:
+        value = getattr(row, "management_type_id", None)
+        if value in (1, 2):
+            return int(value)
+        return 1
+
+    @staticmethod
     def _validate_management_type(management_type_id: int) -> None:
         if management_type_id not in (1, 2):
             raise BranchOfficeValidationError(
@@ -38,7 +45,7 @@ class BranchOfficeService:
             id=str(row.id),
             name=row.branch_office,
             active=row.is_active,
-            managementTypeId=row.management_type_id,
+            managementTypeId=BranchOfficeService._management_type_id(row),
         )
 
     def list_all(self) -> list[BranchOfficePublic]:

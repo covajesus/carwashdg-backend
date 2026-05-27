@@ -41,7 +41,7 @@ class BranchOfficePublic(BaseModel):
     id: str
     name: str
     active: bool
-    managementTypeId: int
+    managementTypeId: int = 1
 
 
 class BranchOfficeListResponse(BaseModel):
