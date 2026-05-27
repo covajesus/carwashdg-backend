@@ -26,11 +26,19 @@ class BranchOfficeService:
         return business_now()
 
     @staticmethod
+    def _validate_management_type(management_type_id: int) -> None:
+        if management_type_id not in (1, 2):
+            raise BranchOfficeValidationError(
+                "Tipo de gestión inválido (use 1 Administrada o 2 Subarriendo)",
+            )
+
+    @staticmethod
     def to_public(row: BranchOffice) -> BranchOfficePublic:
         return BranchOfficePublic(
             id=str(row.id),
             name=row.branch_office,
             active=row.is_active,
+            managementTypeId=row.management_type_id,
         )
 
     def list_all(self) -> list[BranchOfficePublic]:
@@ -48,10 +56,12 @@ class BranchOfficeService:
         name = data.name.strip()
         if not name:
             raise BranchOfficeValidationError("La sucursal es obligatoria")
+        self._validate_management_type(data.managementTypeId)
 
         now = self._now()
         row = BranchOffice(
             branch_office=name,
+            management_type_id=data.managementTypeId,
             added_date=now,
             updated_date=now,
             deleted_date=None if data.active else now,
@@ -74,6 +84,10 @@ class BranchOfficeService:
 
         if data.active is not None:
             row.deleted_date = None if data.active else self._now()
+
+        if data.managementTypeId is not None:
+            self._validate_management_type(data.managementTypeId)
+            row.management_type_id = data.managementTypeId
 
         row.updated_date = self._now()
         self.db.commit()

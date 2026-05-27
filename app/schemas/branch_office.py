@@ -1,6 +1,10 @@
 from datetime import datetime
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
+
+ManagementTypeId = Literal[1, 2]
 
 
 class BranchOfficeBase(BaseModel):
@@ -10,11 +14,13 @@ class BranchOfficeBase(BaseModel):
 class BranchOfficeCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     active: bool = True
+    managementTypeId: ManagementTypeId = Field(..., description="1=Administrada, 2=Subarriendo")
 
 
 class BranchOfficeUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     active: bool | None = None
+    managementTypeId: ManagementTypeId | None = None
 
 
 class BranchOfficeRead(BaseModel):
@@ -35,6 +41,7 @@ class BranchOfficePublic(BaseModel):
     id: str
     name: str
     active: bool
+    managementTypeId: int
 
 
 class BranchOfficeListResponse(BaseModel):

@@ -9,12 +9,11 @@ router = APIRouter(prefix="/reports", tags=["reports"])
 
 
 @router.get(
-    "/eerr/branch/{branch_office_id}",
+    "/eerr",
     response_model=EerrMonthResponse,
     responses={400: {"model": ErrorResponse}, 403: {"model": ErrorResponse}},
 )
 def get_eerr_month(
-    branch_office_id: int,
     year: int,
     month: int,
     current_user: CurrentUserDep,
@@ -23,7 +22,6 @@ def get_eerr_month(
     try:
         return service.build_month(
             current_user,
-            branch_office_id,
             year=year,
             month=month,
         )

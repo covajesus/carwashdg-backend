@@ -11,6 +11,7 @@ class BranchOffice(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     branch_office: Mapped[str] = mapped_column(String(255), nullable=False)
+    management_type_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     added_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     updated_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     deleted_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
