@@ -13,6 +13,7 @@ from app.api.v1.endpoints import (
     collections,
     health,
     raffles,
+    reports,
     roles,
     services,
     settings,
@@ -42,6 +43,7 @@ api_router.include_router(customers.router)
 api_router.include_router(cash_closure.router)
 api_router.include_router(expenses.router)
 api_router.include_router(collections.router)
+api_router.include_router(reports.router)
 api_router.include_router(services.router)
 api_router.include_router(roles.router)
 api_router.include_router(tickets.router)

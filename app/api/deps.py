@@ -16,6 +16,7 @@ from app.services.catalog_service import CatalogService
 from app.services.configuration_service import ConfigurationService
 from app.services.customer_service import CustomerService
 from app.services.expense_service import ExpenseService
+from app.services.eerr_service import EerrService
 from app.services.collection_service import CollectionService
 from app.services.raffle_service import RaffleService
 from app.services.rol_service import RolService
@@ -94,6 +95,10 @@ def get_expense_service(db: DbSession) -> ExpenseService:
     return ExpenseService(db)
 
 
+def get_eerr_service(db: DbSession) -> EerrService:
+    return EerrService(db)
+
+
 def get_collection_service(db: DbSession) -> CollectionService:
     return CollectionService(db)
 
@@ -160,6 +165,7 @@ WasherDailyGroupServiceDep = Annotated[
 ]
 ExpenseServiceDep = Annotated[ExpenseService, Depends(get_expense_service)]
 CollectionServiceDep = Annotated[CollectionService, Depends(get_collection_service)]
+EerrServiceDep = Annotated[EerrService, Depends(get_eerr_service)]
 CashClosureServiceDep = Annotated[CashClosureService, Depends(get_cash_closure_service)]
 UserServiceDep = Annotated[UserService, Depends(get_user_service)]
 CurrentUserDep = Annotated[UserPublic, Depends(get_current_user)]

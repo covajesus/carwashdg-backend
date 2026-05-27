@@ -43,6 +43,11 @@ class TicketValidationError(Exception):
 
 PAYMENT_TYPE_EFECTIVO = 1
 PAYMENT_TYPE_TRANSBANK = 2
+PAYMENT_TYPE_MIXED = 3
+
+PAID_PAYMENT_TYPE_IDS = frozenset(
+    {PAYMENT_TYPE_EFECTIVO, PAYMENT_TYPE_TRANSBANK, PAYMENT_TYPE_MIXED},
+)
 TICKET_STATUS_PAID_ID = 1
 TICKET_STATUS_NOT_PAID_ID = 3
 
@@ -137,7 +142,7 @@ class TicketService:
             paid = self.db.get(Status, TICKET_STATUS_PAID_ID)
             if paid and paid.is_active:
                 return paid.status
-        if row.payment_type_id in (PAYMENT_TYPE_EFECTIVO, PAYMENT_TYPE_TRANSBANK):
+        if row.payment_type_id in PAID_PAYMENT_TYPE_IDS:
             if self._status_label_is_open(status_text):
                 closed_id = self._resolve_closed_status_id()
                 if closed_id is not None:
@@ -149,7 +154,7 @@ class TicketService:
 
     def ticket_is_collected(self, row: Ticket) -> bool:
         """Paid/collected ticket: checkout payment or catalog status Pagado (id=1)."""
-        if row.payment_type_id in (PAYMENT_TYPE_EFECTIVO, PAYMENT_TYPE_TRANSBANK):
+        if row.payment_type_id in PAID_PAYMENT_TYPE_IDS:
             return True
         if row.status_id == TICKET_STATUS_PAID_ID:
             return True
@@ -176,7 +181,7 @@ class TicketService:
 
     def ticket_revenue_day(self, row: Ticket) -> date | None:
         """Business day for earnings and washer pay (checkout/payment day when collected)."""
-        if row.payment_type_id in (PAYMENT_TYPE_EFECTIVO, PAYMENT_TYPE_TRANSBANK):
+        if row.payment_type_id in PAID_PAYMENT_TYPE_IDS:
             if row.updated_date is not None:
                 return business_local_date(row.updated_date)
         if self.ticket_is_collected(row) and row.updated_date is not None:
@@ -366,8 +371,30 @@ class TicketService:
         return {"subtotal": subtotal, "iva": tax, "tax": tax, "total": total}
 
     @staticmethod
-    def _infer_apply_iva_from_row(row: Ticket) -> bool:
+    def _payment_split_amounts(row: Ticket) -> tuple[int, int]:
+        total = parse_ticket_total(row.total) or 0
+        efectivo = int(row.payment_efectivo_amount or 0)
+        transbank = int(row.payment_transbank_amount or 0)
+        if efectivo > 0 or transbank > 0:
+            return efectivo, transbank
+        if row.payment_type_id == PAYMENT_TYPE_EFECTIVO:
+            return total, 0
         if row.payment_type_id == PAYMENT_TYPE_TRANSBANK:
+            return 0, total
+        if row.payment_type_id == PAYMENT_TYPE_MIXED and total > 0:
+            return efectivo, transbank
+        return 0, 0
+
+    @staticmethod
+    def _ticket_has_payment(row: Ticket) -> bool:
+        return row.payment_type_id in PAID_PAYMENT_TYPE_IDS
+
+    @staticmethod
+    def _infer_apply_iva_from_row(row: Ticket) -> bool:
+        if row.payment_type_id in (PAYMENT_TYPE_TRANSBANK, PAYMENT_TYPE_MIXED):
+            return True
+        _, transbank = TicketService._payment_split_amounts(row)
+        if transbank > 0:
             return True
         tax = parse_ticket_total(row.tax)
         if tax is not None:
@@ -416,6 +443,7 @@ class TicketService:
             if group_id is not None:
                 assignee_group_id = str(group_id)
         revenue_day = self.ticket_revenue_day(row)
+        efectivo_amount, transbank_amount = self._payment_split_amounts(row)
         return TicketListItem(
             id=str(row.id),
             folio=f"T-{row.id}",
@@ -435,6 +463,8 @@ class TicketService:
             assigneeWasherId=assignee_washer_id,
             assigneeGroupId=assignee_group_id,
             revenueDay=revenue_day.isoformat() if revenue_day is not None else None,
+            paymentEfectivoAmount=efectivo_amount if efectivo_amount > 0 else None,
+            paymentTransbankAmount=transbank_amount if transbank_amount > 0 else None,
         )
 
     def list_for_user(self, user: UserPublic) -> list[TicketListItem]:
@@ -763,11 +793,8 @@ class TicketService:
         data: TicketCheckout,
         user: UserPublic,
     ) -> TicketCreateResponse:
-        if data.payment_type_id not in (PAYMENT_TYPE_EFECTIVO, PAYMENT_TYPE_TRANSBANK):
-            raise TicketValidationError("Seleccione el método de pago")
-
         row = self._get_visible_ticket(ticket_id, user)
-        if row.payment_type_id in (PAYMENT_TYPE_EFECTIVO, PAYMENT_TYPE_TRANSBANK):
+        if row.payment_type_id in PAID_PAYMENT_TYPE_IDS:
             raise TicketValidationError("Este ticket ya fue cobrado")
 
         active_raffle = self._raffles.get_current_active_raffle()
@@ -776,10 +803,39 @@ class TicketService:
                 "Hay una rifa activa: el ticket debe tener un cliente registrado",
             )
 
-        row.payment_type_id = data.payment_type_id
+        total = round_pesos(data.total)
+        split_efectivo = data.payment_efectivo_amount
+        split_transbank = data.payment_transbank_amount
+        has_split = split_efectivo is not None or split_transbank is not None
+
+        if has_split:
+            efectivo = round_pesos(split_efectivo or 0)
+            transbank = round_pesos(split_transbank or 0)
+            if efectivo <= 0 or transbank <= 0:
+                raise TicketValidationError(
+                    "Indique un monto mayor a 0 en efectivo y en Transbank",
+                )
+            if efectivo + transbank != total:
+                raise TicketValidationError(
+                    "Efectivo + Transbank debe sumar el total del ticket",
+                )
+            row.payment_type_id = PAYMENT_TYPE_MIXED
+            row.payment_efectivo_amount = efectivo
+            row.payment_transbank_amount = transbank
+        else:
+            if data.payment_type_id not in (PAYMENT_TYPE_EFECTIVO, PAYMENT_TYPE_TRANSBANK):
+                raise TicketValidationError("Seleccione el método de pago")
+            row.payment_type_id = data.payment_type_id
+            if data.payment_type_id == PAYMENT_TYPE_EFECTIVO:
+                row.payment_efectivo_amount = total
+                row.payment_transbank_amount = 0
+            else:
+                row.payment_efectivo_amount = 0
+                row.payment_transbank_amount = total
+
         row.subtotal = str(round_pesos(data.subtotal))
         row.tax = str(round_pesos(data.tax))
-        row.total = str(round_pesos(data.total))
+        row.total = str(total)
         closed_status_id = self._resolve_closed_status_id()
         if closed_status_id is not None:
             row.status_id = closed_status_id
@@ -810,7 +866,7 @@ class TicketService:
             raise
 
     def _apply_ticket_gross_amount(self, row: Ticket, gross_amount: int) -> None:
-        if row.payment_type_id in (PAYMENT_TYPE_EFECTIVO, PAYMENT_TYPE_TRANSBANK):
+        if row.payment_type_id in PAID_PAYMENT_TYPE_IDS:
             raise TicketValidationError("No se puede cambiar el monto de un ticket ya cobrado")
         gross = round_pesos(gross_amount)
         if gross <= 0:
@@ -835,7 +891,7 @@ class TicketService:
                 raise TicketValidationError(
                     "Solo puede modificar el monto, el lavador o el estatus del ticket",
                 )
-            if row.payment_type_id in (PAYMENT_TYPE_EFECTIVO, PAYMENT_TYPE_TRANSBANK):
+            if row.payment_type_id in PAID_PAYMENT_TYPE_IDS:
                 if "gross_amount" in patch:
                     raise TicketValidationError("No se puede cambiar el monto de un ticket ya cobrado")
                 if "washer_id" in patch or "washer_daily_group_id" in patch:

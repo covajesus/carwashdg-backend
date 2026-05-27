@@ -15,6 +15,8 @@ class Ticket(Base):
     license_plate_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     photo_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     payment_type_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    payment_efectivo_amount: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    payment_transbank_amount: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tip: Mapped[str | None] = mapped_column(String(255), nullable=True)
     tax: Mapped[str | None] = mapped_column(String(255), nullable=True)

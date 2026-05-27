@@ -62,7 +62,9 @@ class TicketUpdate(BaseModel):
 
 
 class TicketCheckout(BaseModel):
-    payment_type_id: int = Field(..., ge=1, le=2)
+    payment_type_id: int | None = Field(default=None, ge=1, le=2)
+    payment_efectivo_amount: int | None = Field(default=None, ge=0)
+    payment_transbank_amount: int | None = Field(default=None, ge=0)
     needs_tax_receipt: bool | None = None
     subtotal: int = Field(..., ge=0)
     tax: int = Field(..., ge=0)
@@ -100,6 +102,8 @@ class TicketListItem(BaseModel):
     assigneeWasherId: str | None = None
     assigneeGroupId: str | None = None
     revenueDay: str | None = None
+    paymentEfectivoAmount: int | None = None
+    paymentTransbankAmount: int | None = None
 
 
 class TicketServiceLine(BaseModel):
