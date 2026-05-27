@@ -10,7 +10,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.pricing import TICKET_IVA_GROSS_FACTOR, round_pesos
+from app.core.pricing import TICKET_IVA_GROSS_FACTOR, round_money
 from app.models.branch_office import BranchOffice
 from app.models.service import Service
 from app.models.ticket import Ticket
@@ -121,7 +121,7 @@ class WasherPayService:
             return max(0, int(text))
         except ValueError:
             try:
-                return max(0, round_pesos(Decimal(text.replace(",", "."))))
+                return max(0, round_money(Decimal(text.replace(",", "."))))
             except Exception:
                 return 0
 
@@ -332,11 +332,11 @@ class WasherPayService:
 
         total_raw = sum(raw.values())
         if total_raw <= 0:
-            share = round_pesos(Decimal(ticket_subtotal) / Decimal(len(payable)))
+            share = round_money(Decimal(ticket_subtotal) / Decimal(len(payable)))
             return {row.id or 0: share for row in payable}
 
         if total_raw > ticket_subtotal:
-            share = round_pesos(Decimal(ticket_subtotal) / Decimal(len(payable)))
+            share = round_money(Decimal(ticket_subtotal) / Decimal(len(payable)))
             return {row.id or 0: share for row in payable}
 
         return raw
@@ -352,9 +352,9 @@ class WasherPayService:
             return 0
         if ticket_total <= 0:
             if pricing["iva"] > 0:
-                return round_pesos(Decimal(gross) / TICKET_IVA_GROSS_FACTOR)
+                return round_money(Decimal(gross) / TICKET_IVA_GROSS_FACTOR)
             return gross
-        return round_pesos(Decimal(gross) * Decimal(ticket_subtotal) / Decimal(ticket_total))
+        return round_money(Decimal(gross) * Decimal(ticket_subtotal) / Decimal(ticket_total))
 
     def _group_name(self, group_id: int) -> str:
         row = self.db.get(WasherDailyGroup, group_id)
@@ -448,7 +448,7 @@ class WasherPayService:
         """Venta del día por línea: monto neto × % (del día o promedio del grupo)."""
         if line_net <= 0 or pct <= 0:
             return 0
-        return round_pesos(Decimal(line_net) * pct / Decimal("100"))
+        return round_money(Decimal(line_net) * pct / Decimal("100"))
 
     def _group_base_average_pct(self, member_ids: list[int], *, day: date) -> Decimal:
         """Promedio del % base (lun–sáb. / domingo) sin extra por meta."""
@@ -517,7 +517,7 @@ class WasherPayService:
                     if key in seen:
                         continue
                     seen.add(key)
-                    attributed_net = round_pesos(Decimal(line_net) / Decimal(member_count))
+                    attributed_net = round_money(Decimal(line_net) / Decimal(member_count))
                     contexts.append(
                         _WasherPayLineContext(
                             line=line,
@@ -627,7 +627,7 @@ class WasherPayService:
                 )
                 pct_display = self._format_percentage_display(avg_pct)
                 sales_credit = self._line_sales_credit(ctx.full_line_net, avg_pct)
-                commission = round_pesos(
+                commission = round_money(
                     Decimal(sales_credit) / Decimal(ctx.group_member_count),
                 )
                 daily_sales += sales_credit
@@ -775,7 +775,7 @@ class WasherPayService:
                 member_ids = self._group_member_ids_for_pay_day(ctx.group_id, day=day)
                 base_avg = self._group_base_average_pct(member_ids, day=day)
                 pool = self._line_sales_credit(ctx.full_line_net, base_avg)
-                base_commission += round_pesos(
+                base_commission += round_money(
                     Decimal(pool) / Decimal(ctx.group_member_count),
                 )
             else:

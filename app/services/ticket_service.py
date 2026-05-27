@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.datetime_utils import business_local_date, business_now, business_today, datetime_to_iso
 
-from app.core.pricing import round_pesos, split_mixed_payment_totals, ticket_totals_from_subtotal
+from app.core.pricing import round_money, split_mixed_payment_totals, ticket_totals_from_subtotal
 from app.core.ticket_total import parse_ticket_total, sync_ticket_total
 from app.models.branch_office import BranchOffice
 from app.models.customer import Customer
@@ -791,11 +791,11 @@ class TicketService:
             if (
                 parse_ticket_total(row.total) in (None, 0)
                 and data.total is not None
-                and round_pesos(data.total) > 0
+                and round_money(data.total) > 0
             ):
-                row.subtotal = str(round_pesos(data.subtotal or 0))
-                row.tax = str(round_pesos(data.tax or 0))
-                row.total = str(round_pesos(data.total))
+                row.subtotal = str(round_money(data.subtotal or 0))
+                row.tax = str(round_money(data.tax or 0))
+                row.total = str(round_money(data.total))
 
             self.db.commit()
             self.db.refresh(row)
@@ -829,14 +829,14 @@ class TicketService:
                 "Hay una rifa activa: el ticket debe tener un cliente registrado",
             )
 
-        total = round_pesos(data.total)
+        total = round_money(data.total)
         split_efectivo = data.payment_efectivo_amount
         split_transbank = data.payment_transbank_amount
         has_split = split_efectivo is not None or split_transbank is not None
 
         if has_split:
-            efectivo = round_pesos(split_efectivo or 0)
-            transbank = round_pesos(split_transbank or 0)
+            efectivo = round_money(split_efectivo or 0)
+            transbank = round_money(split_transbank or 0)
             if efectivo <= 0 or transbank <= 0:
                 raise TicketValidationError(
                     "Indique un monto mayor a 0 en efectivo y en Transbank",
@@ -864,8 +864,8 @@ class TicketService:
                 row.payment_transbank_amount = total
 
         if not has_split:
-            row.subtotal = str(round_pesos(data.subtotal))
-            row.tax = str(round_pesos(data.tax))
+            row.subtotal = str(round_money(data.subtotal))
+            row.tax = str(round_money(data.tax))
             row.total = str(total)
         closed_status_id = self._resolve_closed_status_id()
         if closed_status_id is not None:
@@ -899,7 +899,7 @@ class TicketService:
     def _apply_ticket_gross_amount(self, row: Ticket, gross_amount: int) -> None:
         if row.payment_type_id in PAID_PAYMENT_TYPE_IDS:
             raise TicketValidationError("No se puede cambiar el monto de un ticket ya cobrado")
-        gross = round_pesos(gross_amount)
+        gross = round_money(gross_amount)
         if gross <= 0:
             raise TicketValidationError("El monto debe ser un entero mayor a 0")
         apply_iva = self._infer_apply_iva_from_row(row)

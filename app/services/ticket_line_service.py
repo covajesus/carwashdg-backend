@@ -4,7 +4,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.datetime_utils import business_now, datetime_to_iso
-from app.core.pricing import round_pesos
+from app.core.pricing import round_money
 from app.models.service import Service
 from app.models.ticket_branch_office_service import TicketBranchOfficeService
 from app.models.user import User
@@ -41,7 +41,7 @@ class TicketLineService:
     @staticmethod
     def _resolved_line_total(row: TicketBranchOfficeService) -> int:
         if row.total is not None:
-            return round_pesos(row.total)
+            return round_money(row.total)
         return 0
 
     def to_public(self, row: TicketBranchOfficeService) -> TicketBranchOfficeServicePublic:
@@ -345,7 +345,7 @@ class TicketLineService:
                 raise TicketLineValidationError(
                     "Indique el monto de cada servicio al crear el ticket",
                 )
-            stored_total = round_pesos(line_total)
+            stored_total = round_money(line_total)
 
             if service_id == 0:
                 if not additional:
@@ -423,7 +423,7 @@ class TicketLineService:
 
         if data.total is None:
             raise TicketLineValidationError("El monto del servicio es obligatorio")
-        stored_total = round_pesos(data.total)
+        stored_total = round_money(data.total)
         row = TicketBranchOfficeService(
             ticket_id=data.ticket_id,
             service_id=data.service_id,
@@ -466,7 +466,7 @@ class TicketLineService:
             )
 
         if data.total is not None:
-            row.total = round_pesos(data.total)
+            row.total = round_money(data.total)
 
         row.updated_date = self._timestamp_str()
         self.db.commit()

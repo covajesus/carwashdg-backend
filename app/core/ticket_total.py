@@ -1,7 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.pricing import round_pesos, ticket_totals_from_subtotal
+from app.core.pricing import round_money, ticket_totals_from_subtotal
 from app.models.ticket import Ticket
 from app.models.ticket_branch_office_service import TicketBranchOfficeService
 
@@ -22,7 +22,7 @@ def _line_amount(line: TicketBranchOfficeService) -> int:
     if svc_id is None and not additional:
         return 0
     if line.total is not None:
-        return round_pesos(line.total)
+        return round_money(line.total)
     return 0
 
 
