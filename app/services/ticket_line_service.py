@@ -137,8 +137,8 @@ class TicketLineService:
     def assignee_labels_for_ticket_ids(
         self,
         ticket_ids: list[int],
-    ) -> dict[int, tuple[str, str]]:
-        """ticket_id → (kind, label) where kind is washer or group."""
+    ) -> dict[int, tuple[str, str, int | None, int | None]]:
+        """ticket_id → (kind, label, washer_id, group_id)."""
         if not ticket_ids:
             return {}
 
@@ -192,15 +192,73 @@ class TicketLineService:
                 if group.id is not None:
                     group_names[int(group.id)] = group.name.strip() or f"Grupo #{group.id}"
 
-        result: dict[int, tuple[str, str]] = {}
+        result: dict[int, tuple[str, str, int | None, int | None]] = {}
         for tid, row in assignment_by_ticket.items():
             if row.washer_daily_group_id is not None:
                 gid = int(row.washer_daily_group_id)
-                result[tid] = ("group", group_names.get(gid, f"Grupo #{gid}"))
+                result[tid] = ("group", group_names.get(gid, f"Grupo #{gid}"), None, gid)
             elif row.washer_id is not None:
                 wid = int(row.washer_id)
-                result[tid] = ("washer", washer_names.get(wid, f"Lavador #{wid}"))
+                result[tid] = ("washer", washer_names.get(wid, f"Lavador #{wid}"), wid, None)
         return result
+
+    def reassign_ticket_assignee(
+        self,
+        ticket_id: int,
+        *,
+        washer_id: int | None,
+        washer_daily_group_id: int | None,
+    ) -> tuple[str, str]:
+        """Actualiza lavador o grupo en todas las líneas activas del ticket."""
+        if ticket_id <= 0:
+            raise TicketLineValidationError("El ticket no es válido")
+        if washer_id is not None and washer_daily_group_id is not None:
+            raise TicketLineValidationError("Seleccione un lavador o un grupo, no ambos")
+        if washer_id is None and washer_daily_group_id is None:
+            raise TicketLineValidationError("Seleccione un lavador o un grupo")
+
+        resolved: int | None = None
+        if washer_daily_group_id is None:
+            resolved = self._resolve_washer(ticket_id=ticket_id, washer_id=washer_id)
+            if resolved is None:
+                raise TicketLineValidationError("Lavador no válido")
+
+        ts = self._timestamp_str()
+        lines = list(
+            self.db.scalars(
+                self._active_filter(select(TicketBranchOfficeService)).where(
+                    TicketBranchOfficeService.ticket_id == ticket_id,
+                ),
+            ).all(),
+        )
+        service_lines = [
+            line
+            for line in lines
+            if line.service_id is not None or (line.additional_service or "").strip()
+        ]
+
+        if service_lines:
+            for line in service_lines:
+                line.washer_id = resolved
+                line.washer_daily_group_id = washer_daily_group_id
+                line.updated_date = ts
+        else:
+            self.assign_washer_to_ticket(
+                ticket_id,
+                washer_id,
+                washer_daily_group_id=washer_daily_group_id,
+                commit=False,
+            )
+
+        if washer_daily_group_id is not None:
+            gid = int(washer_daily_group_id)
+            group = self.db.get(WasherDailyGroup, gid)
+            label = group.name.strip() if group and group.name else f"Grupo #{gid}"
+            return ("group", label)
+        assert resolved is not None
+        user = self.db.get(User, resolved)
+        label = user.full_name.strip() if user and user.full_name else f"Lavador #{resolved}"
+        return ("washer", label)
 
     def assign_washer_to_ticket(
         self,

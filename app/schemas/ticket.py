@@ -41,7 +41,7 @@ class TicketCreate(BaseModel):
 
 
 class TicketUpdate(BaseModel):
-    """Administrador: solo `gross_amount`. Gerente: solo `status_id` (p. ej. No pagado)."""
+    """Administrador: `gross_amount`, lavador/grupo. Gerente: solo `status_id` (p. ej. No pagado)."""
 
     customer_id: int | None = None
     car_type_id: int | None = None
@@ -51,6 +51,14 @@ class TicketUpdate(BaseModel):
     status_id: int | None = None
     tip: str | None = Field(default=None, max_length=255)
     gross_amount: int | None = Field(default=None, ge=1)
+    washer_id: int | None = None
+    washer_daily_group_id: int | None = None
+
+    @model_validator(mode="after")
+    def validate_assignee(self) -> "TicketUpdate":
+        if self.washer_id is not None and self.washer_daily_group_id is not None:
+            raise ValueError("Seleccione un lavador o un grupo, no ambos")
+        return self
 
 
 class TicketCheckout(BaseModel):
@@ -89,6 +97,8 @@ class TicketListItem(BaseModel):
     statusId: str | None = None
     assigneeLabel: str | None = None
     assigneeKind: str | None = None
+    assigneeWasherId: str | None = None
+    assigneeGroupId: str | None = None
     revenueDay: str | None = None
 
 

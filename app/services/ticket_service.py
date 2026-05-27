@@ -401,14 +401,20 @@ class TicketService:
         self,
         row: Ticket,
         *,
-        assignee: tuple[str, str] | None = None,
+        assignee: tuple[str, str, int | None, int | None] | None = None,
     ) -> TicketListItem:
         pricing = self._ticket_pricing(row.id, row)
         created = datetime_to_iso(row.added_date) or ""
         assignee_kind: str | None = None
         assignee_label: str | None = None
+        assignee_washer_id: str | None = None
+        assignee_group_id: str | None = None
         if assignee is not None:
-            assignee_kind, assignee_label = assignee
+            assignee_kind, assignee_label, washer_id, group_id = assignee
+            if washer_id is not None:
+                assignee_washer_id = str(washer_id)
+            if group_id is not None:
+                assignee_group_id = str(group_id)
         revenue_day = self.ticket_revenue_day(row)
         return TicketListItem(
             id=str(row.id),
@@ -426,6 +432,8 @@ class TicketService:
             statusId=str(row.status_id) if row.status_id is not None else None,
             assigneeKind=assignee_kind,
             assigneeLabel=assignee_label,
+            assigneeWasherId=assignee_washer_id,
+            assigneeGroupId=assignee_group_id,
             revenueDay=revenue_day.isoformat() if revenue_day is not None else None,
         )
 
@@ -821,12 +829,38 @@ class TicketService:
             return self.to_public(row)
 
         if user.role == "admin":
-            allowed = {"gross_amount", "status_id"}
+            allowed = {"gross_amount", "status_id", "washer_id", "washer_daily_group_id"}
             disallowed = set(patch.keys()) - allowed
             if disallowed:
-                raise TicketValidationError("Solo puede modificar el monto o el estatus del ticket")
+                raise TicketValidationError(
+                    "Solo puede modificar el monto, el lavador o el estatus del ticket",
+                )
+            if row.payment_type_id in (PAYMENT_TYPE_EFECTIVO, PAYMENT_TYPE_TRANSBANK):
+                if "gross_amount" in patch:
+                    raise TicketValidationError("No se puede cambiar el monto de un ticket ya cobrado")
+                if "washer_id" in patch or "washer_daily_group_id" in patch:
+                    raise TicketValidationError(
+                        "No se puede cambiar el lavador de un ticket ya cobrado",
+                    )
             if "gross_amount" in patch:
                 self._apply_ticket_gross_amount(row, patch["gross_amount"])
+            if "washer_id" in patch or "washer_daily_group_id" in patch:
+                washer_id = patch.get("washer_id")
+                group_id = patch.get("washer_daily_group_id")
+                if washer_id is not None and group_id is not None:
+                    raise TicketValidationError("Seleccione un lavador o un grupo, no ambos")
+                if washer_id is None and group_id is None:
+                    raise TicketValidationError("Seleccione un lavador o un grupo")
+                if group_id is not None:
+                    self._validate_ticket_group(group_id)
+                try:
+                    self._lines.reassign_ticket_assignee(
+                        ticket_id,
+                        washer_id=washer_id,
+                        washer_daily_group_id=group_id,
+                    )
+                except TicketLineValidationError as exc:
+                    raise TicketValidationError(str(exc)) from exc
             if "status_id" in patch:
                 row.status_id = patch["status_id"]
         elif user.role == "manager":
