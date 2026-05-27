@@ -1,4 +1,6 @@
-from fastapi import APIRouter, HTTPException, status
+from datetime import date
+
+from fastapi import APIRouter, HTTPException, Query, status
 
 from app.api.deps import CurrentUserDep, TicketServiceDep
 from app.schemas.ticket import (
@@ -24,8 +26,11 @@ router = APIRouter(prefix="/tickets", tags=["tickets"])
 def list_tickets(
     service: TicketServiceDep,
     current_user: CurrentUserDep,
+    revenue_day: date | None = Query(default=None, alias="date"),
 ) -> TicketListResponse:
-    return TicketListResponse(items=service.list_for_user(current_user))
+    return TicketListResponse(
+        items=service.list_for_user(current_user, revenue_day=revenue_day),
+    )
 
 
 @router.get("/summary", response_model=TicketSummaryResponse)

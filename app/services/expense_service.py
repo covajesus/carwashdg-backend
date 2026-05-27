@@ -18,6 +18,7 @@ EXPENSE_TYPE_LABELS: dict[str, str] = {
     "arriendo": "Arriendo",
     "marketing": "Marketing y publicidad",
     "transporte": "Transporte y combustible",
+    "prestamo": "Préstamo",
     "otros": "Otros",
 }
 

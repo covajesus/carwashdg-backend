@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.datetime_utils import business_local_date, business_now, business_today, datetime_to_iso
 
-from app.core.pricing import round_pesos, ticket_totals_from_subtotal
+from app.core.pricing import round_pesos, split_mixed_payment_totals, ticket_totals_from_subtotal
 from app.core.ticket_total import parse_ticket_total, sync_ticket_total
 from app.models.branch_office import BranchOffice
 from app.models.customer import Customer
@@ -407,13 +407,17 @@ class TicketService:
             if stored is not None:
                 return stored
         ticket_row = row if row is not None else self.db.get(Ticket, ticket_id)
+        lines = self._lines.list_lines_for_ticket(ticket_id)
+        gross = sum(line.price for line in lines)
+        if ticket_row is not None and ticket_row.payment_type_id == PAYMENT_TYPE_MIXED:
+            efectivo, transbank = self._payment_split_amounts(ticket_row)
+            if efectivo > 0 and transbank > 0:
+                return split_mixed_payment_totals(efectivo, transbank)
         apply_iva = (
             self._infer_apply_iva_from_row(ticket_row)
             if ticket_row is not None
             else False
         )
-        lines = self._lines.list_lines_for_ticket(ticket_id)
-        gross = sum(line.price for line in lines)
         return ticket_totals_from_subtotal(gross, apply_iva=apply_iva)
 
     @staticmethod
@@ -467,15 +471,37 @@ class TicketService:
             paymentTransbankAmount=transbank_amount if transbank_amount > 0 else None,
         )
 
-    def list_for_user(self, user: UserPublic) -> list[TicketListItem]:
+    @staticmethod
+    def _list_item_matches_revenue_day(item: TicketListItem, day: date) -> bool:
+        rd = item.revenueDay
+        if not rd:
+            return False
+        return rd.strip()[:10] == day.isoformat()
+
+    def list_for_user(
+        self,
+        user: UserPublic,
+        *,
+        revenue_day: date | None = None,
+    ) -> list[TicketListItem]:
         stmt = self._list_stmt_for_user(user)
         rows = self.db.scalars(stmt).all()
         ticket_ids = [int(row.id) for row in rows if row.id is not None]
         assignees = self._lines.assignee_labels_for_ticket_ids(ticket_ids)
-        return [
+        items = [
             self._to_list_item(row, assignee=assignees.get(int(row.id)) if row.id else None)
             for row in rows
         ]
+
+        scope = self._branch_scope_for_user(user)
+        if scope is not None:
+            effective = business_today()
+            return [i for i in items if self._list_item_matches_revenue_day(i, effective)]
+
+        if revenue_day is not None:
+            return [i for i in items if self._list_item_matches_revenue_day(i, revenue_day)]
+
+        return items
 
     def summary_for_user(self, user: UserPublic) -> TicketSummaryResponse:
         stmt = self._list_stmt_for_user(user)
@@ -815,13 +841,17 @@ class TicketService:
                 raise TicketValidationError(
                     "Indique un monto mayor a 0 en efectivo y en Transbank",
                 )
-            if efectivo + transbank != total:
+            mixed_pricing = split_mixed_payment_totals(efectivo, transbank)
+            if mixed_pricing["total"] != total:
                 raise TicketValidationError(
                     "Efectivo + Transbank debe sumar el total del ticket",
                 )
             row.payment_type_id = PAYMENT_TYPE_MIXED
             row.payment_efectivo_amount = efectivo
             row.payment_transbank_amount = transbank
+            row.subtotal = str(mixed_pricing["subtotal"])
+            row.tax = str(mixed_pricing["tax"])
+            row.total = str(mixed_pricing["total"])
         else:
             if data.payment_type_id not in (PAYMENT_TYPE_EFECTIVO, PAYMENT_TYPE_TRANSBANK):
                 raise TicketValidationError("Seleccione el método de pago")
@@ -833,9 +863,10 @@ class TicketService:
                 row.payment_efectivo_amount = 0
                 row.payment_transbank_amount = total
 
-        row.subtotal = str(round_pesos(data.subtotal))
-        row.tax = str(round_pesos(data.tax))
-        row.total = str(total)
+        if not has_split:
+            row.subtotal = str(round_pesos(data.subtotal))
+            row.tax = str(round_pesos(data.tax))
+            row.total = str(total)
         closed_status_id = self._resolve_closed_status_id()
         if closed_status_id is not None:
             row.status_id = closed_status_id
