@@ -127,7 +127,7 @@ class EerrService:
                 EerrDetailItem(
                     id=f"day:{day_key}",
                     date=day_key,
-                    description=f"Recaudación {day_key}",
+                    description="Recaudación del día",
                     amount=totals["subtotal"],
                 ),
             )
@@ -160,7 +160,7 @@ class EerrService:
                 EerrDetailItem(
                     id=f"washer:{day_key}",
                     date=day_key,
-                    description=f"Pago lavadores {day_key}",
+                    description="Pago lavadores del día",
                     amount=day_total,
                 ),
             )
@@ -196,14 +196,20 @@ class EerrService:
                 arriendo_total += amount
             else:
                 expenses_operational_total += amount
+            by_day: dict[str, int] = defaultdict(int)
+            for r in rows:
+                day_key = _expense_date_key(r.expense_date, r.added_date)
+                if day_key is None:
+                    continue
+                by_day[day_key] += int(r.amount or 0)
             items = [
                 EerrDetailItem(
-                    id=str(r.id),
-                    date=_expense_date_key(r.expense_date, r.added_date),
-                    description=r.expense_type_label or label,
-                    amount=int(r.amount or 0),
+                    id=f"{type_id}:{day_key}",
+                    date=day_key,
+                    description=label,
+                    amount=day_amount,
                 )
-                for r in rows
+                for day_key, day_amount in sorted(by_day.items())
             ]
             accounts.append(
                 EerrAccountLine(
@@ -227,7 +233,7 @@ class EerrService:
             )
 
         expenses_total = expenses_operational_total + arriendo_total
-        net_profit = revenue_subtotal - washer_pay_total - expenses_operational_total
+        net_profit = revenue_subtotal - washer_pay_total - expenses_total
 
         return EerrMonthResponse(
             branch_office_id="0",
