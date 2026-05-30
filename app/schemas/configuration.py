@@ -11,6 +11,7 @@ class ConfigurationUpdate(BaseModel):
     twitter_url: str | None = Field(default=None, max_length=255)
     tiktok_url: str | None = Field(default=None, max_length=255)
     instagram_url: str | None = Field(default=None, max_length=255)
+    coin_round_status_id: int | None = Field(default=None, ge=0, le=1)
 
 
 class ConfigurationRead(BaseModel):
@@ -24,6 +25,7 @@ class ConfigurationRead(BaseModel):
     twitter_url: str
     tiktok_url: str
     instagram_url: str
+    coin_round_status_id: int = Field(ge=0, le=1)
 
 
 class ConfigurationPublic(BaseModel):
@@ -39,6 +41,10 @@ class ConfigurationPublic(BaseModel):
 
 class ConfigurationItemResponse(BaseModel):
     item: ConfigurationPublic
+
+
+class ConfigurationSettingsItemResponse(BaseModel):
+    item: ConfigurationRead
 
 
 class ErrorResponse(BaseModel):

@@ -1,12 +1,22 @@
 from decimal import Decimal, ROUND_HALF_UP
 
 TICKET_IVA_GROSS_FACTOR = Decimal("1.19")
+COIN_ROUND_UNIT = 1000
 
 
 def round_money(value: Decimal | int | float | str) -> int:
     if not isinstance(value, Decimal):
         value = Decimal(str(value))
     return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def round_coins_to_nearest_thousand(amount: int) -> int:
+    """Redondea al mil de pesos más cercano (44300→44000, 44500→45000)."""
+    if amount <= 0:
+        return 0
+    thousands = Decimal(amount) / Decimal(COIN_ROUND_UNIT)
+    rounded = int(thousands.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    return rounded * COIN_ROUND_UNIT
 
 
 def ticket_totals_from_subtotal(

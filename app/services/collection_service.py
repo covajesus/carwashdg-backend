@@ -2,7 +2,8 @@ import calendar
 from copy import deepcopy
 from datetime import date
 
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.branch_scope import branch_scope_for_user
@@ -73,28 +74,128 @@ class CollectionService:
     def _active_stmt(self):
         return select(BranchCollection).where(BranchCollection.deleted_date.is_(None))
 
-    def get_manual_gross(self, branch_office_id: int, collection_date: date) -> int:
-        row = self.db.scalars(
+    @staticmethod
+    def _day_key(value: date | str | None) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, date):
+            return value.isoformat()
+        text_value = str(value).strip()
+        return text_value[:10] if len(text_value) >= 10 else None
+
+    def _legacy_manual_by_day(
+        self,
+        branch_office_id: int | None = None,
+    ) -> dict[str, int]:
+        """Filas en branch_recaudacion (nombre legacy) si aún no migraron la tabla."""
+        sql = """
+            SELECT collection_date, gross_amount
+            FROM branch_recaudacion
+            WHERE deleted_date IS NULL AND gross_amount > 0
+        """
+        params: dict[str, int] = {}
+        if branch_office_id is not None:
+            sql += " AND branch_office_id = :branch_office_id"
+            params["branch_office_id"] = branch_office_id
+        try:
+            rows = self.db.execute(text(sql), params).all()
+        except (ProgrammingError, SQLAlchemyError):
+            self.db.rollback()
+            return {}
+
+        amounts: dict[str, int] = {}
+        for collection_date, gross_amount in rows:
+            day_key = self._day_key(collection_date)
+            if day_key is None:
+                continue
+            amounts[day_key] = max(0, int(gross_amount or 0))
+        return amounts
+
+    def _manual_gross_by_day_key(self, branch_office_id: int) -> dict[str, int]:
+        amounts = self._legacy_manual_by_day(branch_office_id)
+        for row in self.db.scalars(
             self._active_stmt().where(
                 BranchCollection.branch_office_id == branch_office_id,
-                BranchCollection.collection_date == collection_date,
             ),
-        ).first()
-        if row is None:
+        ).all():
+            if row.collection_date is None or row.gross_amount <= 0:
+                continue
+            day_key = self._day_key(row.collection_date)
+            if day_key is None:
+                continue
+            amounts[day_key] = max(0, int(row.gross_amount or 0))
+        return amounts
+
+    def get_manual_gross(self, branch_office_id: int, collection_date: date) -> int:
+        day_key = self._day_key(collection_date)
+        if day_key is None:
             return 0
-        return max(0, int(row.gross_amount or 0))
+        return self._manual_gross_by_day_key(branch_office_id).get(day_key, 0)
 
     def list_manual_for_branch(self, branch_office_id: int) -> list[BranchCollection]:
-        return list(
+        rows = list(
             self.db.scalars(
                 self._active_stmt().where(
                     BranchCollection.branch_office_id == branch_office_id,
                 ),
             ).all(),
         )
+        covered = {
+            self._day_key(row.collection_date)
+            for row in rows
+            if row.collection_date is not None
+        }
+        for day_key, gross in self._legacy_manual_by_day(branch_office_id).items():
+            if day_key in covered or gross <= 0:
+                continue
+            rows.append(
+                BranchCollection(
+                    branch_office_id=branch_office_id,
+                    collection_date=date.fromisoformat(day_key),
+                    gross_amount=gross,
+                ),
+            )
+        return rows
 
     def list_manual_all(self) -> list[BranchCollection]:
-        return list(self.db.scalars(self._active_stmt()).all())
+        rows = list(self.db.scalars(self._active_stmt()).all())
+        covered = {
+            (int(row.branch_office_id), self._day_key(row.collection_date))
+            for row in rows
+            if row.collection_date is not None
+        }
+        try:
+            legacy_rows = self.db.execute(
+                text(
+                    """
+                    SELECT branch_office_id, collection_date, gross_amount
+                    FROM branch_recaudacion
+                    WHERE deleted_date IS NULL AND gross_amount > 0
+                    """,
+                ),
+            ).all()
+        except (ProgrammingError, SQLAlchemyError):
+            self.db.rollback()
+            return rows
+
+        for branch_id, collection_date, gross_amount in legacy_rows:
+            day_key = self._day_key(collection_date)
+            if day_key is None:
+                continue
+            key = (int(branch_id), day_key)
+            if key in covered:
+                continue
+            gross = max(0, int(gross_amount or 0))
+            if gross <= 0:
+                continue
+            rows.append(
+                BranchCollection(
+                    branch_office_id=int(branch_id),
+                    collection_date=date.fromisoformat(day_key),
+                    gross_amount=gross,
+                ),
+            )
+        return rows
 
     def merge_into_date_buckets(
         self,
@@ -139,14 +240,14 @@ class CollectionService:
         gross = int(data.gross_amount)
         now = self._now()
         row = self.db.scalars(
-            self._active_stmt().where(
+            select(BranchCollection).where(
                 BranchCollection.branch_office_id == branch_office_id,
                 BranchCollection.collection_date == collection_date,
             ),
         ).first()
 
         if gross <= 0:
-            if row is not None:
+            if row is not None and row.deleted_date is None:
                 row.deleted_date = now
                 row.updated_date = now
                 self.db.commit()
@@ -165,6 +266,7 @@ class CollectionService:
         else:
             row.gross_amount = gross
             row.updated_date = now
+            row.deleted_date = None
             self.db.commit()
 
     def build_day_response(
@@ -236,13 +338,7 @@ class CollectionService:
         last_day = calendar.monthrange(year, month)[1]
         today = business_today()
 
-        manual_by_day: dict[str, int] = {}
-        for row in self.list_manual_for_branch(branch_office_id):
-            if row.collection_date is None:
-                continue
-            if row.collection_date.year != year or row.collection_date.month != month:
-                continue
-            manual_by_day[row.collection_date.isoformat()] = max(0, int(row.gross_amount or 0))
+        manual_by_day: dict[str, int] = self._manual_gross_by_day_key(branch_office_id)
 
         days: list[CollectionCalendarDay] = []
         for day_num in range(1, last_day + 1):

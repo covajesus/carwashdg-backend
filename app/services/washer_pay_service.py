@@ -10,8 +10,9 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.pricing import TICKET_IVA_GROSS_FACTOR, round_money
+from app.core.pricing import TICKET_IVA_GROSS_FACTOR, round_coins_to_nearest_thousand, round_money
 from app.models.branch_office import BranchOffice
+from app.models.configuration import Configuration
 from app.models.service import Service
 from app.models.ticket import Ticket
 from app.models.ticket_branch_office_service import TicketBranchOfficeService
@@ -55,6 +56,19 @@ class WasherPayService:
         self._tickets = TicketService(db)
         self._lines = TicketLineService(db)
         self._washer_groups = WasherDailyGroupService(db)
+
+    def _coin_round_enabled(self) -> bool:
+        row = self.db.get(Configuration, 1)
+        if row is None:
+            row = self.db.scalars(select(Configuration).limit(1)).first()
+        if row is None:
+            return False
+        return int(row.coin_round_status_id or 0) == 1
+
+    def _apply_coin_round(self, amount: int) -> int:
+        if not self._coin_round_enabled():
+            return amount
+        return round_coins_to_nearest_thousand(amount)
 
     @staticmethod
     def _format_percentage_display(value: Decimal) -> str:
@@ -672,6 +686,7 @@ class WasherPayService:
             )
 
         total = sum(line.amount for line in detail_lines)
+        total = self._apply_coin_round(total)
         return total, len(ticket_ids), detail_lines, daily_sales
 
     def summary_by_branch_and_date(

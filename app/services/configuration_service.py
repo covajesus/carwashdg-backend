@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.configuration import Configuration
-from app.schemas.configuration import ConfigurationPublic, ConfigurationUpdate
+from app.schemas.configuration import ConfigurationPublic, ConfigurationRead, ConfigurationUpdate
 
 _EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
@@ -55,6 +55,20 @@ class ConfigurationService:
             updated_date=updated_date,
         )
 
+    @staticmethod
+    def to_admin_settings(row: Configuration, *, updated_date: datetime | None = None) -> ConfigurationRead:
+        return ConfigurationRead(
+            id=row.id,
+            phone=row.phone,
+            email=row.email,
+            address=row.address,
+            facebook_url=row.facebook_url,
+            twitter_url=row.twitter_url,
+            tiktok_url=row.tiktok_url,
+            instagram_url=row.instagram_url,
+            coin_round_status_id=int(row.coin_round_status_id or 0),
+        )
+
     def _get_or_create_row(self) -> Configuration:
         row = self.db.get(Configuration, 1)
         if row is not None:
@@ -73,19 +87,28 @@ class ConfigurationService:
             facebook_url="",
             twitter_url="",
             instagram_url="",
+            coin_round_status_id=0,
         )
         self.db.add(row)
         self.db.commit()
         self.db.refresh(row)
         return row
 
+    def get_admin_settings(self) -> ConfigurationRead:
+        row = self._get_or_create_row()
+        return self.to_admin_settings(row)
+
     def get_settings(self) -> ConfigurationPublic:
         row = self._get_or_create_row()
         return self.to_public(row)
 
-    def update_settings(self, data: ConfigurationUpdate) -> ConfigurationPublic:
+    def update_settings(self, data: ConfigurationUpdate) -> ConfigurationRead:
         row = self._get_or_create_row()
         patch = data.model_dump(exclude_unset=True)
+
+        if "coin_round_status_id" in patch:
+            value = patch["coin_round_status_id"]
+            row.coin_round_status_id = 1 if int(value or 0) == 1 else 0
 
         if "email" in patch:
             email = (patch["email"] or "").strip()
@@ -110,4 +133,4 @@ class ConfigurationService:
 
         self.db.commit()
         self.db.refresh(row)
-        return self.to_public(row, updated_date=self._now())
+        return self.to_admin_settings(row, updated_date=self._now())

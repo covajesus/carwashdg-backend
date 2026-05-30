@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, status
 
 from app.api.deps import ConfigurationServiceDep
 from app.schemas.configuration import (
-    ConfigurationItemResponse,
+    ConfigurationSettingsItemResponse,
     ConfigurationUpdate,
     ErrorResponse,
 )
@@ -13,16 +13,16 @@ router = APIRouter(prefix="/settings", tags=["configurations"])
 
 @router.get(
     "",
-    response_model=ConfigurationItemResponse,
+    response_model=ConfigurationSettingsItemResponse,
     responses={401: {"model": ErrorResponse}},
 )
-def get_settings(service: ConfigurationServiceDep) -> ConfigurationItemResponse:
-    return ConfigurationItemResponse(item=service.get_settings())
+def get_settings(service: ConfigurationServiceDep) -> ConfigurationSettingsItemResponse:
+    return ConfigurationSettingsItemResponse(item=service.get_admin_settings())
 
 
 @router.patch(
     "",
-    response_model=ConfigurationItemResponse,
+    response_model=ConfigurationSettingsItemResponse,
     responses={
         400: {"model": ErrorResponse},
         401: {"model": ErrorResponse},
@@ -31,9 +31,9 @@ def get_settings(service: ConfigurationServiceDep) -> ConfigurationItemResponse:
 def update_settings(
     body: ConfigurationUpdate,
     service: ConfigurationServiceDep,
-) -> ConfigurationItemResponse:
+) -> ConfigurationSettingsItemResponse:
     try:
         item = service.update_settings(body)
     except ConfigurationValidationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    return ConfigurationItemResponse(item=item)
+    return ConfigurationSettingsItemResponse(item=item)
