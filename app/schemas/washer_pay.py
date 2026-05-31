@@ -6,7 +6,10 @@ WasherPayPaymentStatus = Literal["paid", "unpaid"]
 
 
 class WasherPaySummaryItem(BaseModel):
-    washer_id: str
+    kind: Literal["washer", "group"] = "washer"
+    washer_id: str | None = None
+    group_id: str | None = None
+    member_washer_ids: list[str] = Field(default_factory=list)
     full_name: str
     amount: int = Field(ge=0)
     ticket_count: int = Field(ge=0)
@@ -60,6 +63,18 @@ class WasherPayDetailResponse(BaseModel):
     goal_met: bool = False
     commission_total: int = Field(ge=0)
     goal_bonus: int = Field(ge=0)
+    sales_efectivo_net: int = Field(
+        ge=0,
+        description="Ventas netas del día cobradas en efectivo",
+    )
+    sales_card_net: int = Field(
+        ge=0,
+        description="Ventas netas del día vía Transbank (incl. boleta/factura)",
+    )
+    sales_total_net: int = Field(
+        ge=0,
+        description="Suma de ventas netas efectivo + Transbank/boleta/factura",
+    )
     items: list[WasherPayDetailLine]
     amount: int = Field(ge=0)
     payment_status: WasherPayPaymentStatus = "unpaid"

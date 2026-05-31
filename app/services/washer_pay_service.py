@@ -10,7 +10,12 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.pricing import TICKET_IVA_GROSS_FACTOR, round_coins_to_nearest_thousand, round_money
+from app.core.pricing import (
+    TICKET_IVA_GROSS_FACTOR,
+    round_coins_to_nearest_thousand,
+    round_money,
+    split_mixed_payment_totals,
+)
 from app.models.branch_office import BranchOffice
 from app.models.configuration import Configuration
 from app.models.service import Service
@@ -370,6 +375,75 @@ class WasherPayService:
             return gross
         return round_money(Decimal(gross) * Decimal(ticket_subtotal) / Decimal(ticket_total))
 
+    def _line_net_payment_split(self, ticket: Ticket, line_net: int) -> tuple[int, int]:
+        """Reparte el neto de la línea entre efectivo y tarjeta (Transbank/boleta/factura)."""
+        if line_net <= 0 or ticket.id is None:
+            return 0, 0
+
+        efectivo_gross, transbank_gross = TicketService._payment_split_amounts(ticket)
+        if transbank_gross <= 0:
+            return line_net, 0
+        if efectivo_gross <= 0:
+            return 0, line_net
+
+        mixed = split_mixed_payment_totals(efectivo_gross, transbank_gross)
+        subtotal_total = mixed["subtotal"]
+        if subtotal_total <= 0:
+            return line_net, 0
+
+        efectivo_part = round_money(
+            Decimal(line_net) * Decimal(efectivo_gross) / Decimal(subtotal_total),
+        )
+        card_part = line_net - efectivo_part
+        return efectivo_part, card_part
+
+    def _washer_sales_net_by_payment(
+        self,
+        line_contexts: list[_WasherPayLineContext],
+    ) -> tuple[int, int, int]:
+        efectivo_total = 0
+        card_total = 0
+        seen: set[tuple[int, int]] = set()
+        for ctx in line_contexts:
+            ticket_id = ctx.ticket.id or 0
+            line_id = ctx.line.id or 0
+            key = (ticket_id, line_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            efectivo_part, card_part = self._line_net_payment_split(
+                ctx.ticket,
+                ctx.full_line_net,
+            )
+            efectivo_total += efectivo_part
+            card_total += card_part
+        return efectivo_total, card_total, efectivo_total + card_total
+
+    def _group_sales_net_by_payment(
+        self,
+        *,
+        branch_office_id: int,
+        group_id: int,
+        day: date,
+    ) -> tuple[int, int, int]:
+        efectivo_total = 0
+        card_total = 0
+        seen: set[tuple[int, int]] = set()
+        for line, ticket, _line_rows, line_net in self._iter_branch_payable_lines(
+            branch_office_id=branch_office_id,
+            day=day,
+        ):
+            if line.washer_daily_group_id != group_id:
+                continue
+            key = (ticket.id or 0, line.id or 0)
+            if key in seen:
+                continue
+            seen.add(key)
+            efectivo_part, card_part = self._line_net_payment_split(ticket, line_net)
+            efectivo_total += efectivo_part
+            card_total += card_part
+        return efectivo_total, card_total, efectivo_total + card_total
+
     def _group_name(self, group_id: int) -> str:
         row = self.db.get(WasherDailyGroup, group_id)
         if row is None or not row.is_active:
@@ -689,6 +763,35 @@ class WasherPayService:
         total = self._apply_coin_round(total)
         return total, len(ticket_ids), detail_lines, daily_sales
 
+    def _group_ticket_ids_for_day(
+        self,
+        *,
+        branch_office_id: int,
+        group_id: int,
+        day: date,
+    ) -> set[int]:
+        ticket_ids: set[int] = set()
+        for line, ticket, _line_rows, _line_net in self._iter_branch_payable_lines(
+            branch_office_id=branch_office_id,
+            day=day,
+        ):
+            if line.washer_daily_group_id != group_id:
+                continue
+            if ticket.id is not None:
+                ticket_ids.add(ticket.id)
+        return ticket_ids
+
+    def _format_group_applied_percentage(self, values: list[str]) -> str | None:
+        parsed = [
+            self._parse_percentage(value)
+            for value in values
+            if (value or "").strip()
+        ]
+        if not parsed:
+            return None
+        avg = sum(parsed, Decimal("0")) / Decimal(len(parsed))
+        return self._format_percentage_display(avg)
+
     def summary_by_branch_and_date(
         self,
         user: UserPublic,
@@ -705,7 +808,7 @@ class WasherPayService:
             day=day,
             washer_ids=washer_ids,
         )
-        items: list[WasherPaySummaryItem] = []
+        washer_by_id: dict[int, dict[str, object]] = {}
         for washer_id in washer_ids:
             amount, ticket_count, _, daily_sales = self._compute_washer_pay(
                 branch_office_id=branch_office_id,
@@ -726,18 +829,99 @@ class WasherPayService:
                 if assignment is not None
                 else None
             )
+            washer_by_id[washer_id] = {
+                "full_name": self._washer_full_name(washer_id),
+                "amount": amount,
+                "ticket_count": ticket_count,
+                "applied_percentage": applied_pct,
+                "payment_status": status_map.get(washer_id, "unpaid"),
+            }
+
+        options = self._washer_groups.ticket_washer_options(
+            user,
+            branch_office_id=branch_office_id,
+            group_date=day,
+        )
+        assignees: list[tuple[str, int, str]] = []
+        for group in options.groups:
+            assignees.append(("group", int(group.id), group.name.strip()))
+        for washer in options.washers:
+            assignees.append(("washer", int(washer.id), washer.full_name.strip()))
+        assignees.sort(key=lambda row: row[2].lower())
+
+        items: list[WasherPaySummaryItem] = []
+        for kind, entity_id, display_name in assignees:
+            if kind == "washer":
+                data = washer_by_id.get(entity_id)
+                if data is None:
+                    continue
+                items.append(
+                    WasherPaySummaryItem(
+                        kind="washer",
+                        washer_id=str(entity_id),
+                        full_name=str(data["full_name"]),
+                        amount=int(data["amount"]),
+                        ticket_count=int(data["ticket_count"]),
+                        applied_percentage=(
+                            str(data["applied_percentage"])
+                            if data["applied_percentage"] is not None
+                            else None
+                        ),
+                        payment_status=status_map.get(entity_id, "unpaid"),
+                    ),
+                )
+                continue
+
+            member_ids = self._washer_groups.member_ids_for_group_on_date(
+                entity_id,
+                day=day,
+            )
+            if not member_ids:
+                continue
+            group_ticket_ids = self._group_ticket_ids_for_day(
+                branch_office_id=branch_office_id,
+                group_id=entity_id,
+                day=day,
+            )
+            group_amount = sum(
+                int(washer_by_id.get(member_id, {}).get("amount", 0))
+                for member_id in member_ids
+            )
+            if group_amount <= 0 and not group_ticket_ids:
+                continue
+            member_pcts = [
+                str(washer_by_id[member_id]["applied_percentage"])
+                for member_id in member_ids
+                if member_id in washer_by_id
+                and washer_by_id[member_id].get("applied_percentage") is not None
+            ]
+            paying_members = [
+                member_id
+                for member_id in member_ids
+                if int(washer_by_id.get(member_id, {}).get("amount", 0)) > 0
+            ]
+            group_status: WasherPayPaymentStatus = (
+                "paid"
+                if paying_members
+                and all(
+                    washer_by_id.get(member_id, {}).get("payment_status") == "paid"
+                    for member_id in paying_members
+                )
+                else "unpaid"
+            )
             items.append(
                 WasherPaySummaryItem(
-                    washer_id=str(washer_id),
-                    full_name=self._washer_full_name(washer_id),
-                    amount=amount,
-                    ticket_count=ticket_count,
-                    applied_percentage=applied_pct,
-                    payment_status=status_map.get(washer_id, "unpaid"),
+                    kind="group",
+                    group_id=str(entity_id),
+                    member_washer_ids=[str(member_id) for member_id in member_ids],
+                    full_name=display_name,
+                    amount=group_amount,
+                    ticket_count=len(group_ticket_ids),
+                    applied_percentage=self._format_group_applied_percentage(member_pcts),
+                    payment_status=group_status,
                 ),
             )
 
-        items.sort(key=lambda row: row.full_name.lower())
         return WasherPaySummaryResponse(
             branch_office_id=str(branch_office_id),
             branch_name=branch.branch_office,
@@ -753,6 +937,7 @@ class WasherPayService:
         branch_office_id: int,
         date_value: str,
         washer_id: int,
+        group_id: int | None = None,
     ) -> WasherPayDetailResponse:
         branch = self._ensure_branch_access(user, branch_office_id)
         day = self._parse_date(date_value)
@@ -807,6 +992,19 @@ class WasherPayService:
         if boost_pct > 0 and not is_sunday:
             applied_label = "Porcentaje aplicado hoy (base + meta)"
 
+        if group_id is not None and group_id > 0:
+            sales_efectivo_net, sales_card_net, sales_total_net = (
+                self._group_sales_net_by_payment(
+                    branch_office_id=branch_office_id,
+                    group_id=group_id,
+                    day=day,
+                )
+            )
+        else:
+            sales_efectivo_net, sales_card_net, sales_total_net = (
+                self._washer_sales_net_by_payment(line_contexts)
+            )
+
         return WasherPayDetailResponse(
             washer_id=str(washer_id),
             full_name=self._washer_full_name(washer_id),
@@ -825,6 +1023,9 @@ class WasherPayService:
             goal_met=goal_met,
             commission_total=commission_total,
             goal_bonus=goal_bonus,
+            sales_efectivo_net=sales_efectivo_net,
+            sales_card_net=sales_card_net,
+            sales_total_net=sales_total_net,
             items=detail_lines,
             amount=amount,
             payment_status=self._get_payment_status(

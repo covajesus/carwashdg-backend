@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 
 from app.api.deps import CurrentUserDep, WasherPayServiceDep
 from app.schemas.ticket import ErrorResponse
@@ -47,6 +47,7 @@ def washer_pay_detail(
     washer_id: int,
     current_user: CurrentUserDep,
     service: WasherPayServiceDep,
+    group_id: int | None = Query(default=None, ge=1),
 ) -> WasherPayDetailResponse:
     if branch_office_id < 1:
         raise HTTPException(status_code=400, detail="Sucursal no válida")
@@ -58,6 +59,7 @@ def washer_pay_detail(
             branch_office_id=branch_office_id,
             date_value=date_value,
             washer_id=washer_id,
+            group_id=group_id,
         )
     except WasherPayValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
