@@ -27,7 +27,7 @@ class TicketCreate(BaseModel):
     customer_id: int | None = None
     car_type_id: int | None = None
     license_plate_id: str | None = Field(default=None, max_length=255)
-    photo_url: str | None = Field(default=None, max_length=500)
+    photo_url: str | None = None
     payment_type_id: int | None = Field(default=None, ge=1, le=2)
     needs_tax_receipt: bool | None = None
     status_id: int | None = None
@@ -46,7 +46,7 @@ class TicketUpdate(BaseModel):
     customer_id: int | None = None
     car_type_id: int | None = None
     license_plate_id: str | None = Field(default=None, max_length=255)
-    photo_url: str | None = Field(default=None, max_length=500)
+    photo_url: str | None = None
     payment_type_id: int | None = None
     status_id: int | None = None
     tip: str | None = Field(default=None, max_length=255)
