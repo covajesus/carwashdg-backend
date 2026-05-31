@@ -101,6 +101,7 @@ class TicketListItem(BaseModel):
     assigneeKind: str | None = None
     assigneeWasherId: str | None = None
     assigneeGroupId: str | None = None
+    photo_url: str | None = None
     revenueDay: str | None = None
     paymentEfectivoAmount: int | None = None
     paymentTransbankAmount: int | None = None

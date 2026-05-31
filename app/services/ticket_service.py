@@ -466,6 +466,7 @@ class TicketService:
             assigneeLabel=assignee_label,
             assigneeWasherId=assignee_washer_id,
             assigneeGroupId=assignee_group_id,
+            photo_url=self._normalize_photo(row.photo_url),
             revenueDay=revenue_day.isoformat() if revenue_day is not None else None,
             paymentEfectivoAmount=efectivo_amount if efectivo_amount > 0 else None,
             paymentTransbankAmount=transbank_amount if transbank_amount > 0 else None,
@@ -713,12 +714,20 @@ class TicketService:
             subtotal=pricing["subtotal"],
             iva=pricing["iva"],
             total=pricing["total"],
-            photo_url=row.photo_url,
+            photo_url=self._normalize_photo(row.photo_url),
         )
 
     def get_by_id(self, ticket_id: int, user: UserPublic) -> TicketPublic:
         row = self._get_visible_ticket(ticket_id, user)
         return self.to_public(row)
+
+    def _normalize_photo(value: str | None) -> str | None:
+        text = (value or "").strip()
+        if not text:
+            return None
+        if text.startswith("data:image/") and ("," not in text or len(text) < 120):
+            return None
+        return text
 
     def create(self, data: TicketCreate) -> TicketCreateResponse:
         """Crear ticket sin cobro: el pago se confirma después (checkout / PayTicket)."""
@@ -738,7 +747,7 @@ class TicketService:
             customer_id=data.customer_id,
             car_type_id=data.car_type_id,
             license_plate_id=(data.license_plate_id or "").strip() or None,
-            photo_url=(data.photo_url or "").strip() or None,
+            photo_url=self._normalize_photo(data.photo_url),
             payment_type_id=None,
             status_id=data.status_id,
             tip=(data.tip or "").strip() or None,
