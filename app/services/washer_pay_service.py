@@ -397,35 +397,55 @@ class WasherPayService:
         card_part = line_net - efectivo_part
         return efectivo_part, card_part
 
-    def _washer_sales_net_by_payment(
+    def _line_pay_payment_split(
+        self,
+        ticket: Ticket,
+        line_net: int,
+        commission: int,
+    ) -> tuple[int, int]:
+        """Reparte la comisión de la línea entre efectivo y tarjeta."""
+        if commission <= 0 or line_net <= 0:
+            return 0, 0
+        efectivo_net, card_net = self._line_net_payment_split(ticket, line_net)
+        efectivo_pay = round_money(
+            Decimal(commission) * Decimal(efectivo_net) / Decimal(line_net),
+        )
+        return efectivo_pay, commission - efectivo_pay
+
+    def _washer_pay_by_payment(
         self,
         line_contexts: list[_WasherPayLineContext],
+        ticket_detail_lines: list[WasherPayDetailLine],
     ) -> tuple[int, int, int]:
         efectivo_total = 0
         card_total = 0
-        seen: set[tuple[int, int]] = set()
-        for ctx in line_contexts:
-            ticket_id = ctx.ticket.id or 0
-            line_id = ctx.line.id or 0
-            key = (ticket_id, line_id)
-            if key in seen:
+        for ctx, detail_line in zip(line_contexts, ticket_detail_lines, strict=False):
+            if detail_line.kind != "ticket":
                 continue
-            seen.add(key)
-            efectivo_part, card_part = self._line_net_payment_split(
+            commission = detail_line.amount
+            efectivo_part, card_part = self._line_pay_payment_split(
                 ctx.ticket,
                 ctx.full_line_net,
+                commission,
             )
             efectivo_total += efectivo_part
             card_total += card_part
         return efectivo_total, card_total, efectivo_total + card_total
 
-    def _group_sales_net_by_payment(
+    def _group_pay_by_payment(
         self,
         *,
         branch_office_id: int,
         group_id: int,
         day: date,
     ) -> tuple[int, int, int]:
+        member_ids = self._washer_groups.member_ids_for_group_on_date(group_id, day=day)
+        if not member_ids:
+            return 0, 0, 0
+        sales_map = self._branch_washer_attributed_sales(
+            branch_office_id=branch_office_id,
+            day=day,
+        )
         efectivo_total = 0
         card_total = 0
         seen: set[tuple[int, int]] = set()
@@ -439,10 +459,55 @@ class WasherPayService:
             if key in seen:
                 continue
             seen.add(key)
-            efectivo_part, card_part = self._line_net_payment_split(ticket, line_net)
+            avg_pct = self._group_average_effective_pct(
+                member_ids=member_ids,
+                day=day,
+                sales_map=sales_map,
+            )
+            commission = self._line_sales_credit(line_net, avg_pct)
+            efectivo_part, card_part = self._line_pay_payment_split(
+                ticket,
+                line_net,
+                commission,
+            )
             efectivo_total += efectivo_part
             card_total += card_part
         return efectivo_total, card_total, efectivo_total + card_total
+
+    def _group_total_pay_amount(
+        self,
+        *,
+        branch_office_id: int,
+        group_id: int,
+        day: date,
+    ) -> int:
+        member_ids = self._washer_groups.member_ids_for_group_on_date(group_id, day=day)
+        total = 0
+        for member_id in member_ids:
+            member_amount, _, _, _ = self._compute_washer_pay(
+                branch_office_id=branch_office_id,
+                washer_id=member_id,
+                day=day,
+            )
+            total += member_amount
+        return total
+
+    @staticmethod
+    def _reconcile_pay_split_to_target(
+        efectivo: int,
+        card: int,
+        target: int,
+    ) -> tuple[int, int, int]:
+        total = efectivo + card
+        if target <= 0:
+            return 0, 0, 0
+        if total == target:
+            return efectivo, card, target
+        if total <= 0:
+            return target, 0, target
+        delta = target - total
+        efectivo = max(0, efectivo + delta)
+        return efectivo, card, target
 
     def _group_name(self, group_id: int) -> str:
         row = self.db.get(WasherDailyGroup, group_id)
@@ -969,18 +1034,39 @@ class WasherPayService:
             daily_sales=daily_sales,
         )
         effective_pct = base_pct + boost_pct
+        sales_map = self._branch_washer_attributed_sales(
+            branch_office_id=branch_office_id,
+            day=day,
+        )
         base_commission = 0
+        boosted_commission = 0
         for ctx in line_contexts:
             if ctx.group_id is not None:
                 member_ids = self._group_member_ids_for_pay_day(ctx.group_id, day=day)
                 base_avg = self._group_base_average_pct(member_ids, day=day)
                 pool = self._line_sales_credit(ctx.full_line_net, base_avg)
+                avg_pct = self._group_average_effective_pct(
+                    member_ids=member_ids,
+                    day=day,
+                    sales_map=sales_map,
+                )
+                boosted_pool = self._line_sales_credit(ctx.full_line_net, avg_pct)
                 base_commission += round_money(
                     Decimal(pool) / Decimal(ctx.group_member_count),
                 )
+                boosted_commission += round_money(
+                    Decimal(boosted_pool) / Decimal(ctx.group_member_count),
+                )
             else:
-                base_commission += self._line_sales_credit(ctx.full_line_net, base_pct)
-        goal_bonus = max(0, amount - base_commission)
+                base_part = self._line_sales_credit(ctx.full_line_net, base_pct)
+                boosted_part = self._line_sales_credit(ctx.full_line_net, effective_pct)
+                base_commission += base_part
+                boosted_commission += boosted_part
+        goal_bonus = (
+            max(0, boosted_commission - base_commission)
+            if goal_met and boost_pct > 0
+            else 0
+        )
         commission_total = base_commission
 
         applied_label = (
@@ -993,17 +1079,26 @@ class WasherPayService:
             applied_label = "Porcentaje aplicado hoy (base + meta)"
 
         if group_id is not None and group_id > 0:
-            sales_efectivo_net, sales_card_net, sales_total_net = (
-                self._group_sales_net_by_payment(
-                    branch_office_id=branch_office_id,
-                    group_id=group_id,
-                    day=day,
-                )
+            amount = self._group_total_pay_amount(
+                branch_office_id=branch_office_id,
+                group_id=group_id,
+                day=day,
+            )
+            pay_efectivo, pay_card, pay_total = self._group_pay_by_payment(
+                branch_office_id=branch_office_id,
+                group_id=group_id,
+                day=day,
             )
         else:
-            sales_efectivo_net, sales_card_net, sales_total_net = (
-                self._washer_sales_net_by_payment(line_contexts)
+            pay_efectivo, pay_card, pay_total = self._washer_pay_by_payment(
+                line_contexts,
+                ticket_lines,
             )
+        pay_efectivo, pay_card, pay_total = self._reconcile_pay_split_to_target(
+            pay_efectivo,
+            pay_card,
+            amount,
+        )
 
         return WasherPayDetailResponse(
             washer_id=str(washer_id),
@@ -1023,9 +1118,9 @@ class WasherPayService:
             goal_met=goal_met,
             commission_total=commission_total,
             goal_bonus=goal_bonus,
-            sales_efectivo_net=sales_efectivo_net,
-            sales_card_net=sales_card_net,
-            sales_total_net=sales_total_net,
+            sales_efectivo_net=pay_efectivo,
+            sales_card_net=pay_card,
+            sales_total_net=pay_total,
             items=detail_lines,
             amount=amount,
             payment_status=self._get_payment_status(

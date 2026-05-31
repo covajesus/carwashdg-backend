@@ -65,15 +65,15 @@ class WasherPayDetailResponse(BaseModel):
     goal_bonus: int = Field(ge=0)
     sales_efectivo_net: int = Field(
         ge=0,
-        description="Ventas netas del día cobradas en efectivo",
+        description="Comisión ganada cobrada en efectivo",
     )
     sales_card_net: int = Field(
         ge=0,
-        description="Ventas netas del día vía Transbank (incl. boleta/factura)",
+        description="Comisión ganada vía Transbank (incl. boleta/factura)",
     )
     sales_total_net: int = Field(
         ge=0,
-        description="Suma de ventas netas efectivo + Transbank/boleta/factura",
+        description="Total a pagar (efectivo + Transbank/boleta/factura)",
     )
     items: list[WasherPayDetailLine]
     amount: int = Field(ge=0)
