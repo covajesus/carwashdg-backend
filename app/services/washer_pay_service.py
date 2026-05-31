@@ -97,13 +97,11 @@ class WasherPayService:
         assignment,
         *,
         day: date,
-        daily_sales: int,
+        goal_met: bool,
     ) -> Decimal:
-        goal_amount = self._parse_goal_amount(assignment.daily_goal if assignment else None)
         goal_pct = self._parse_percentage(
             assignment.daily_goal_percentage if assignment else None,
         )
-        goal_met = goal_amount > 0 and daily_sales >= goal_amount
         if (
             self._goal_percentage_boost_applies_on_day(day)
             and goal_met
@@ -117,14 +115,29 @@ class WasherPayService:
         assignment,
         *,
         day: date,
-        daily_sales: int,
+        goal_met: bool,
     ) -> Decimal:
         base = self._percentage_for_date(assignment, day=day)
         return base + self._goal_percentage_boost(
             assignment,
             day=day,
-            daily_sales=daily_sales,
+            goal_met=goal_met,
         )
+
+    def _member_goal_amount(self, assignment) -> int:
+        return self._parse_goal_amount(assignment.daily_goal if assignment else None)
+
+    def _combined_group_goal_amount(self, member_ids: list[int]) -> int:
+        total = 0
+        for member_id in member_ids:
+            assignment = self._branch_washer.get_active_assignment_for_washer(member_id)
+            if assignment is not None:
+                total += self._member_goal_amount(assignment)
+        return total
+
+    @staticmethod
+    def _is_goal_met(*, sales_volume: int, goal_amount: int) -> bool:
+        return goal_amount > 0 and sales_volume >= goal_amount
 
     @staticmethod
     def _parse_percentage(value: str | None, *, fallback: Decimal = Decimal("0")) -> Decimal:
@@ -467,9 +480,14 @@ class WasherPayService:
         member_ids = self._washer_groups.member_ids_for_group_on_date(group_id, day=day)
         if not member_ids:
             return 0, 0, 0
-        sales_map = self._branch_washer_attributed_sales(
+        _ef_gross, _card_gross, group_gross = self._group_sales_gross_by_payment(
             branch_office_id=branch_office_id,
+            group_id=group_id,
             day=day,
+        )
+        group_goal_met = self._is_goal_met(
+            sales_volume=group_gross,
+            goal_amount=self._combined_group_goal_amount(member_ids),
         )
         efectivo_total = 0
         card_total = 0
@@ -487,7 +505,7 @@ class WasherPayService:
             avg_pct = self._group_average_effective_pct(
                 member_ids=member_ids,
                 day=day,
-                sales_map=sales_map,
+                goal_met=group_goal_met,
             )
             commission = self._line_sales_credit(line_net, avg_pct)
             efectivo_part, card_part = self._line_pay_payment_split(
@@ -510,19 +528,19 @@ class WasherPayService:
         member_ids = self._washer_groups.member_ids_for_group_on_date(group_id, day=day)
         if not member_ids:
             return 0
-        sales_map = self._branch_washer_attributed_sales(
-            branch_office_id=branch_office_id,
-            day=day,
-        )
         _ef_gross, card_gross, gross_total = self._group_sales_gross_by_payment(
             branch_office_id=branch_office_id,
             group_id=group_id,
             day=day,
         )
+        group_goal_met = self._is_goal_met(
+            sales_volume=gross_total,
+            goal_amount=self._combined_group_goal_amount(member_ids),
+        )
         avg_pct = self._group_average_effective_pct(
             member_ids=member_ids,
             day=day,
-            sales_map=sales_map,
+            goal_met=group_goal_met,
         )
         *_, _, _, final_amount = self._waterfall_pay_steps(
             gross_total,
@@ -875,7 +893,7 @@ class WasherPayService:
         *,
         member_ids: list[int],
         day: date,
-        sales_map: dict[int, int],
+        goal_met: bool,
     ) -> Decimal:
         if not member_ids:
             return Decimal("0")
@@ -884,11 +902,10 @@ class WasherPayService:
             assignment = self._branch_washer.get_active_assignment_for_washer(member_id)
             if assignment is None:
                 continue
-            daily_sales = sales_map.get(member_id, 0)
             total += self._effective_percentage(
                 assignment,
                 day=day,
-                daily_sales=daily_sales,
+                goal_met=goal_met,
             )
         return total / Decimal(len(member_ids))
 
@@ -1027,20 +1044,20 @@ class WasherPayService:
         ticket_ids = {ctx.ticket.id for ctx in line_contexts if ctx.ticket.id is not None}
 
         base_pct = self._percentage_for_date(assignment, day=day)
-        prelim_daily_sales = sum(
-            self._line_sales_credit(ctx.full_line_net, base_pct) for ctx in line_contexts
+        solo_sales_gross = self._washer_sales_volume(line_contexts)
+        solo_goal_met = self._is_goal_met(
+            sales_volume=solo_sales_gross,
+            goal_amount=self._member_goal_amount(assignment),
         )
-
         boost_pct = self._goal_percentage_boost(
             assignment,
             day=day,
-            daily_sales=prelim_daily_sales,
+            goal_met=solo_goal_met,
         )
         effective_pct = base_pct + boost_pct
         effective_pct_display = self._format_percentage_display(effective_pct)
 
         detail_lines: list[WasherPayDetailLine] = []
-        daily_sales = 0
         for ctx in line_contexts:
             ticket_id = str(ctx.ticket.id) if ctx.ticket.id is not None else None
             plate = (ctx.ticket.license_plate_id or "").strip()
@@ -1051,7 +1068,6 @@ class WasherPayService:
             description_parts.append(service_label)
 
             sales_credit = self._line_sales_credit(ctx.full_line_net, effective_pct)
-            daily_sales += sales_credit
             detail_lines.append(
                 WasherPayDetailLine(
                     kind="ticket",
@@ -1071,14 +1087,14 @@ class WasherPayService:
 
         total = sum(line.amount for line in detail_lines)
         total = self._apply_coin_round(total)
-        return total, len(ticket_ids), detail_lines, daily_sales
+        return total, len(ticket_ids), detail_lines, solo_sales_gross
 
     def _detail_lines_for_group_contexts(
         self,
         *,
         line_contexts: list[_WasherPayLineContext],
         day: date,
-        sales_map: dict[int, int],
+        goal_met: bool,
     ) -> list[WasherPayDetailLine]:
         detail_lines: list[WasherPayDetailLine] = []
         for ctx in line_contexts:
@@ -1088,7 +1104,7 @@ class WasherPayService:
             avg_pct = self._group_average_effective_pct(
                 member_ids=member_ids,
                 day=day,
-                sales_map=sales_map,
+                goal_met=goal_met,
             )
             pct_display = self._format_percentage_display(avg_pct)
             sales_credit = self._line_sales_credit(ctx.full_line_net, avg_pct)
@@ -1165,13 +1181,9 @@ class WasherPayService:
             day=day,
             washer_ids=washer_ids,
         )
-        sales_map = self._branch_washer_attributed_sales(
-            branch_office_id=branch_office_id,
-            day=day,
-        )
         washer_by_id: dict[int, dict[str, object]] = {}
         for washer_id in washer_ids:
-            amount, ticket_count, _, daily_sales = self._compute_washer_pay(
+            amount, ticket_count, _, solo_sales_gross = self._compute_washer_pay(
                 branch_office_id=branch_office_id,
                 washer_id=washer_id,
                 day=day,
@@ -1179,12 +1191,16 @@ class WasherPayService:
             if ticket_count <= 0 and amount <= 0:
                 continue
             assignment = self._branch_washer.get_active_assignment_for_washer(washer_id)
+            solo_goal_met = self._is_goal_met(
+                sales_volume=solo_sales_gross,
+                goal_amount=self._member_goal_amount(assignment),
+            )
             applied_pct = (
                 self._format_percentage_display(
                     self._effective_percentage(
                         assignment,
                         day=day,
-                        daily_sales=daily_sales,
+                        goal_met=solo_goal_met,
                     ),
                 )
                 if assignment is not None
@@ -1251,12 +1267,21 @@ class WasherPayService:
             )
             if group_amount <= 0 and not group_ticket_ids:
                 continue
+            group_sales_gross = self._group_sales_volume(
+                branch_office_id=branch_office_id,
+                group_id=entity_id,
+                day=day,
+            )
+            group_goal_met = self._is_goal_met(
+                sales_volume=group_sales_gross,
+                goal_amount=self._combined_group_goal_amount(member_ids),
+            )
             member_pcts = [
                 self._format_percentage_display(
                     self._effective_percentage(
                         assignment_row,
                         day=day,
-                        daily_sales=sales_map.get(member_id, 0),
+                        goal_met=group_goal_met,
                     ),
                 )
                 for member_id in member_ids
@@ -1313,26 +1338,35 @@ class WasherPayService:
             raise WasherPayValidationError("El lavador no pertenece a esta sucursal")
 
         assignment = self._branch_washer.get_active_assignment_for_washer(washer_id)
-        amount, _, detail_lines, daily_sales_for_goal = self._compute_washer_pay(
+        amount, _, detail_lines, solo_sales_gross = self._compute_washer_pay(
             branch_office_id=branch_office_id,
             washer_id=washer_id,
             day=day,
         )
         ticket_lines = [line for line in detail_lines if line.kind == "ticket"]
+        member_ids: list[int] = []
+        group_goal_met = False
         if group_id is not None and group_id > 0:
+            member_ids = self._group_member_ids_for_pay_day(group_id, day=day)
             line_contexts = self._paid_line_contexts_for_group(
                 branch_office_id=branch_office_id,
                 group_id=group_id,
                 day=day,
             )
-            sales_map = self._branch_washer_attributed_sales(
+            daily_sales_volume = self._group_sales_volume(
                 branch_office_id=branch_office_id,
+                group_id=group_id,
                 day=day,
+            )
+            goal_amount = self._combined_group_goal_amount(member_ids)
+            group_goal_met = self._is_goal_met(
+                sales_volume=daily_sales_volume,
+                goal_amount=goal_amount,
             )
             detail_lines = self._detail_lines_for_group_contexts(
                 line_contexts=line_contexts,
                 day=day,
-                sales_map=sales_map,
+                goal_met=group_goal_met,
             )
             ticket_lines = [line for line in detail_lines if line.kind == "ticket"]
         else:
@@ -1341,35 +1375,28 @@ class WasherPayService:
                 washer_id=washer_id,
                 day=day,
             )
-        goal_amount = self._parse_goal_amount(
-            assignment.daily_goal if assignment else None,
-        )
-        if group_id is not None and group_id > 0:
-            daily_sales_volume = self._group_sales_volume(
-                branch_office_id=branch_office_id,
-                group_id=group_id,
-                day=day,
-            )
-        else:
             daily_sales_volume = self._washer_sales_volume(line_contexts)
-        goal_met = goal_amount > 0 and daily_sales_volume >= goal_amount
+            goal_amount = self._member_goal_amount(assignment)
+        solo_goal_met = self._is_goal_met(
+            sales_volume=solo_sales_gross,
+            goal_amount=self._member_goal_amount(assignment),
+        )
+        goal_met = group_goal_met if group_id is not None and group_id > 0 else self._is_goal_met(
+            sales_volume=daily_sales_volume,
+            goal_amount=goal_amount,
+        )
 
         is_sunday = day.weekday() == 6
         base_pct = self._percentage_for_date(assignment, day=day) if assignment else Decimal("0")
         boost_pct = self._goal_percentage_boost(
             assignment,
             day=day,
-            daily_sales=daily_sales_for_goal,
+            goal_met=solo_goal_met,
         )
         effective_pct = base_pct + boost_pct
-        sales_map = self._branch_washer_attributed_sales(
-            branch_office_id=branch_office_id,
-            day=day,
-        )
         base_commission = 0
         boosted_commission = 0
         if group_id is not None and group_id > 0:
-            member_ids = self._group_member_ids_for_pay_day(group_id, day=day)
             seen_group_lines: set[tuple[int, int]] = set()
             for line, ticket, _line_rows, _line_gross, line_net in self._iter_branch_payable_lines(
                 branch_office_id=branch_office_id,
@@ -1385,7 +1412,7 @@ class WasherPayService:
                 avg_pct = self._group_average_effective_pct(
                     member_ids=member_ids,
                     day=day,
-                    sales_map=sales_map,
+                    goal_met=group_goal_met,
                 )
                 base_commission += self._line_sales_credit(line_net, base_avg)
                 boosted_commission += self._line_sales_credit(line_net, avg_pct)
@@ -1397,7 +1424,7 @@ class WasherPayService:
                 boosted_commission += boosted_part
         goal_bonus = (
             max(0, boosted_commission - base_commission)
-            if goal_met and boost_pct > 0
+            if goal_met and boosted_commission > base_commission
             else 0
         )
         commission_total = base_commission
@@ -1409,13 +1436,12 @@ class WasherPayService:
         )
         applied_raw = self._format_percentage_display(effective_pct)
         if group_id is not None and group_id > 0:
-            member_ids = self._group_member_ids_for_pay_day(group_id, day=day)
             member_pcts = [
                 self._format_percentage_display(
                     self._effective_percentage(
                         assignment_row,
                         day=day,
-                        daily_sales=sales_map.get(member_id, 0),
+                        goal_met=group_goal_met,
                     ),
                 )
                 for member_id in member_ids
@@ -1425,7 +1451,9 @@ class WasherPayService:
                 is not None
             ]
             applied_raw = self._format_group_applied_percentage(member_pcts) or applied_raw
-        if boost_pct > 0 and not is_sunday:
+            if group_goal_met and not is_sunday:
+                applied_label = "Porcentaje aplicado hoy (base + meta)"
+        elif boost_pct > 0 and not is_sunday:
             applied_label = "Porcentaje aplicado hoy (base + meta)"
 
         if group_id is not None and group_id > 0:
@@ -1434,11 +1462,10 @@ class WasherPayService:
                 group_id=group_id,
                 day=day,
             )
-            member_ids = self._group_member_ids_for_pay_day(group_id, day=day)
             breakdown_pct = self._group_average_effective_pct(
                 member_ids=member_ids,
                 day=day,
-                sales_map=sales_map,
+                goal_met=group_goal_met,
             )
             is_group_breakdown = True
         else:
@@ -1510,7 +1537,11 @@ class WasherPayService:
             date=day.isoformat(),
             daily_sales=daily_sales_volume,
             daily_sales_net=daily_sales_net,
-            daily_goal=assignment.daily_goal if assignment else None,
+            daily_goal=(
+                str(goal_amount) if goal_amount > 0 else None
+            )
+            if group_id is not None and group_id > 0
+            else (assignment.daily_goal if assignment else None),
             daily_goal_percentage=(
                 assignment.daily_goal_percentage if assignment else None
             ),
