@@ -61,7 +61,7 @@ class WasherPayDetailResponse(BaseModel):
     date: str
     daily_sales: int = Field(
         ge=0,
-        description="Total vendido del día (neto, sin aplicar % del lavador)",
+        description="Total vendido del día (bruto, sin aplicar % del lavador)",
     )
     daily_goal: str | None = None
     daily_goal_percentage: str | None = None

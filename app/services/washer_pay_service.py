@@ -45,6 +45,7 @@ class _WasherPayLineContext:
     line: TicketBranchOfficeService
     ticket: Ticket
     attributed_net: int
+    full_line_gross: int
     full_line_net: int
     group_id: int | None
     group_member_count: int
@@ -450,7 +451,7 @@ class WasherPayService:
         efectivo_total = 0
         card_total = 0
         seen: set[tuple[int, int]] = set()
-        for line, ticket, _line_rows, line_net in self._iter_branch_payable_lines(
+        for line, ticket, _line_rows, _line_gross, line_net in self._iter_branch_payable_lines(
             branch_office_id=branch_office_id,
             day=day,
         ):
@@ -514,7 +515,7 @@ class WasherPayService:
         self,
         line_contexts: list[_WasherPayLineContext],
     ) -> int:
-        """Total vendido (neto) atribuido al lavador, sin aplicar %."""
+        """Total vendido (bruto) atribuido al lavador, sin aplicar %."""
         total = 0
         seen: set[tuple[int, int]] = set()
         for ctx in line_contexts:
@@ -522,7 +523,7 @@ class WasherPayService:
             if key in seen:
                 continue
             seen.add(key)
-            total += ctx.full_line_net
+            total += ctx.full_line_gross
         return total
 
     def _group_sales_volume(
@@ -532,10 +533,10 @@ class WasherPayService:
         group_id: int,
         day: date,
     ) -> int:
-        """Total vendido (neto) del grupo, sin aplicar %."""
+        """Total vendido (bruto) del grupo, sin aplicar %."""
         total = 0
         seen: set[tuple[int, int]] = set()
-        for line, ticket, _line_rows, line_net in self._iter_branch_payable_lines(
+        for line, ticket, _line_rows, line_gross, _line_net in self._iter_branch_payable_lines(
             branch_office_id=branch_office_id,
             day=day,
         ):
@@ -545,7 +546,7 @@ class WasherPayService:
             if key in seen:
                 continue
             seen.add(key)
-            total += line_net
+            total += line_gross
         return total
 
     def _group_name(self, group_id: int) -> str:
@@ -604,7 +605,7 @@ class WasherPayService:
                 line_net = self._gross_to_net(gross, ticket=ticket)
                 if line_net <= 0:
                     continue
-                yield line, ticket, line_rows, line_net
+                yield line, ticket, line_rows, gross, line_net
 
     def _branch_washer_attributed_sales(
         self,
@@ -613,7 +614,7 @@ class WasherPayService:
         day: date,
     ) -> dict[int, int]:
         sales: dict[int, int] = defaultdict(int)
-        for line, ticket, line_rows, line_net in self._iter_branch_payable_lines(
+        for line, ticket, line_rows, _line_gross, line_net in self._iter_branch_payable_lines(
             branch_office_id=branch_office_id,
             day=day,
         ):
@@ -694,7 +695,7 @@ class WasherPayService:
         contexts: list[_WasherPayLineContext] = []
         seen: set[tuple[int, int]] = set()
 
-        for line, ticket, line_rows, line_net in self._iter_branch_payable_lines(
+        for line, ticket, line_rows, line_gross, line_net in self._iter_branch_payable_lines(
             branch_office_id=branch_office_id,
             day=day,
         ):
@@ -715,6 +716,7 @@ class WasherPayService:
                             line=line,
                             ticket=ticket,
                             attributed_net=attributed_net,
+                            full_line_gross=line_gross,
                             full_line_net=line_net,
                             group_id=group_id,
                             group_member_count=member_count,
@@ -735,6 +737,7 @@ class WasherPayService:
                     line=line,
                     ticket=ticket,
                     attributed_net=line_net,
+                    full_line_gross=line_gross,
                     full_line_net=line_net,
                     group_id=None,
                     group_member_count=1,
@@ -875,7 +878,7 @@ class WasherPayService:
         day: date,
     ) -> set[int]:
         ticket_ids: set[int] = set()
-        for line, ticket, _line_rows, _line_net in self._iter_branch_payable_lines(
+        for line, ticket, _line_rows, _line_gross, _line_net in self._iter_branch_payable_lines(
             branch_office_id=branch_office_id,
             day=day,
         ):
