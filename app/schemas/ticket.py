@@ -175,6 +175,7 @@ class TicketDetailResponse(BaseModel):
     subtotal: int
     iva: int
     total: int
+    photo_url: str | None = None
 
 
 class TicketItemResponse(BaseModel):

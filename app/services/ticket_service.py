@@ -713,6 +713,7 @@ class TicketService:
             subtotal=pricing["subtotal"],
             iva=pricing["iva"],
             total=pricing["total"],
+            photo_url=row.photo_url,
         )
 
     def get_by_id(self, ticket_id: int, user: UserPublic) -> TicketPublic:
