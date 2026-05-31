@@ -504,7 +504,7 @@ class WasherPayService:
         group_id: int,
         day: date,
     ) -> int:
-        """Comisión única del grupo: solo tickets asignados al grupo × % promedio."""
+        """Comisión única del grupo vía bruto → IVA tarjeta → % → redondeo."""
         member_ids = self._washer_groups.member_ids_for_group_on_date(group_id, day=day)
         if not member_ids:
             return 0
@@ -512,25 +512,22 @@ class WasherPayService:
             branch_office_id=branch_office_id,
             day=day,
         )
-        total = 0
-        seen: set[tuple[int, int]] = set()
-        for line, ticket, _line_rows, _line_gross, line_net in self._iter_branch_payable_lines(
+        _ef_gross, card_gross, gross_total = self._group_sales_gross_by_payment(
             branch_office_id=branch_office_id,
+            group_id=group_id,
             day=day,
-        ):
-            if line.washer_daily_group_id != group_id:
-                continue
-            key = (ticket.id or 0, line.id or 0)
-            if key in seen:
-                continue
-            seen.add(key)
-            avg_pct = self._group_average_effective_pct(
-                member_ids=member_ids,
-                day=day,
-                sales_map=sales_map,
-            )
-            total += self._line_sales_credit(line_net, avg_pct)
-        return self._apply_coin_round(total)
+        )
+        avg_pct = self._group_average_effective_pct(
+            member_ids=member_ids,
+            day=day,
+            sales_map=sales_map,
+        )
+        *_, _, _, final_amount = self._waterfall_pay_steps(
+            gross_total,
+            card_gross,
+            avg_pct,
+        )
+        return final_amount
 
     @staticmethod
     def _reconcile_pay_split_to_target(
@@ -608,6 +605,21 @@ class WasherPayService:
             card += card_part
         return efectivo, card, efectivo + card
 
+    def _waterfall_pay_steps(
+        self,
+        gross_total: int,
+        card_gross: int,
+        effective_pct: Decimal,
+    ) -> tuple[int, int, int, int]:
+        """IVA tarjeta, total calculado (bruto − IVA), comisión %, total con redondeo."""
+        card_iva = self._card_iva_from_gross(card_gross)
+        total_calculado = self._apply_coin_round(max(0, gross_total - card_iva))
+        commission_before = round_money(
+            Decimal(total_calculado) * effective_pct / Decimal("100"),
+        )
+        final_amount = self._apply_coin_round(commission_before)
+        return card_iva, total_calculado, commission_before, final_amount
+
     def _card_iva_from_gross(self, card_gross: int) -> int:
         if card_gross <= 0:
             return 0
@@ -620,22 +632,19 @@ class WasherPayService:
         gross_total: int,
         card_gross: int,
         effective_pct: Decimal,
-        final_amount: int,
-    ) -> list[WasherPayBreakdownRow]:
-        card_iva = self._card_iva_from_gross(card_gross)
-        net_after_iva = max(0, gross_total - card_iva)
-        commission_before = round_money(
-            Decimal(net_after_iva) * effective_pct / Decimal("100"),
+        is_group: bool = False,
+    ) -> tuple[list[WasherPayBreakdownRow], int]:
+        card_iva, total_calculado, commission_before, final_amount = (
+            self._waterfall_pay_steps(gross_total, card_gross, effective_pct)
         )
         pct_label = self._format_percentage_display(effective_pct)
+        first_label = "Total del Grupo" if is_group else "Total lavador"
+        final_label = "Total a pagar por el grupo" if is_group else "Total a pagar"
         rows: list[WasherPayBreakdownRow] = [
-            WasherPayBreakdownRow(label="Monto bruto", amount=gross_total),
-            WasherPayBreakdownRow(
-                label="Tarjeta (Transbank + boleta + factura)",
-                amount=card_gross,
-            ),
-            WasherPayBreakdownRow(label="IVA (solo tarjeta)", amount=card_iva),
-            WasherPayBreakdownRow(label="Total menos IVA", amount=net_after_iva),
+            WasherPayBreakdownRow(label=first_label, amount=gross_total),
+            WasherPayBreakdownRow(label="Tarjeta", amount=card_gross),
+            WasherPayBreakdownRow(label="IVA", amount=card_iva),
+            WasherPayBreakdownRow(label="Total calculado", amount=total_calculado),
             WasherPayBreakdownRow(
                 label=f"Comisión ({pct_label})",
                 amount=commission_before,
@@ -644,7 +653,7 @@ class WasherPayService:
         if commission_before != final_amount:
             rows.append(
                 WasherPayBreakdownRow(
-                    label="Total a pagar (redondeo)",
+                    label=f"{final_label} (redondeo)",
                     amount=final_amount,
                     emphasis=True,
                 ),
@@ -652,12 +661,12 @@ class WasherPayService:
         else:
             rows.append(
                 WasherPayBreakdownRow(
-                    label="Total a pagar",
+                    label=final_label,
                     amount=final_amount,
                     emphasis=True,
                 ),
             )
-        return rows
+        return rows, final_amount
 
     def _washer_sales_liquid_by_payment(
         self,
@@ -1371,11 +1380,34 @@ class WasherPayService:
             applied_label = "Porcentaje aplicado hoy (base + meta)"
 
         if group_id is not None and group_id > 0:
-            amount = self._group_total_pay_amount(
+            _ef_gross, card_gross, gross_total = self._group_sales_gross_by_payment(
                 branch_office_id=branch_office_id,
                 group_id=group_id,
                 day=day,
             )
+            member_ids = self._group_member_ids_for_pay_day(group_id, day=day)
+            breakdown_pct = self._group_average_effective_pct(
+                member_ids=member_ids,
+                day=day,
+                sales_map=sales_map,
+            )
+            is_group_breakdown = True
+        else:
+            _ef_gross, card_gross, gross_total = self._washer_sales_gross_by_payment(
+                line_contexts,
+            )
+            breakdown_pct = effective_pct
+            is_group_breakdown = False
+
+        pay_breakdown, breakdown_amount = self._build_pay_breakdown(
+            gross_total=gross_total,
+            card_gross=card_gross,
+            effective_pct=breakdown_pct,
+            is_group=is_group_breakdown,
+        )
+        amount = breakdown_amount
+
+        if group_id is not None and group_id > 0:
             pay_efectivo, pay_card, pay_total = self._group_pay_by_payment(
                 branch_office_id=branch_office_id,
                 group_id=group_id,
@@ -1420,31 +1452,6 @@ class WasherPayService:
                             amount=per_member,
                         ),
                     )
-
-        if group_id is not None and group_id > 0:
-            _ef_gross, card_gross, gross_total = self._group_sales_gross_by_payment(
-                branch_office_id=branch_office_id,
-                group_id=group_id,
-                day=day,
-            )
-            member_ids = self._group_member_ids_for_pay_day(group_id, day=day)
-            breakdown_pct = self._group_average_effective_pct(
-                member_ids=member_ids,
-                day=day,
-                sales_map=sales_map,
-            )
-        else:
-            _ef_gross, card_gross, gross_total = self._washer_sales_gross_by_payment(
-                line_contexts,
-            )
-            breakdown_pct = effective_pct
-
-        pay_breakdown = self._build_pay_breakdown(
-            gross_total=gross_total,
-            card_gross=card_gross,
-            effective_pct=breakdown_pct,
-            final_amount=amount,
-        )
 
         return WasherPayDetailResponse(
             washer_id=str(washer_id),
