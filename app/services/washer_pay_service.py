@@ -26,6 +26,7 @@ from app.models.washer_daily_group import WasherDailyGroup
 from app.models.washer_pay_settlement import WasherPaySettlement
 from app.schemas.user import UserPublic
 from app.schemas.washer_pay import (
+    WasherPayBreakdownRow,
     WasherPayDetailLine,
     WasherPayDetailResponse,
     WasherPayGroupMemberItem,
@@ -377,6 +378,26 @@ class WasherPayService:
             return gross
         return round_money(Decimal(gross) * Decimal(ticket_subtotal) / Decimal(ticket_total))
 
+    def _line_gross_payment_split(self, ticket: Ticket, line_gross: int) -> tuple[int, int]:
+        """Reparte el bruto de la línea entre efectivo y tarjeta."""
+        if line_gross <= 0 or ticket.id is None:
+            return 0, 0
+
+        efectivo_gross, transbank_gross = TicketService._payment_split_amounts(ticket)
+        if transbank_gross <= 0:
+            return line_gross, 0
+        if efectivo_gross <= 0:
+            return 0, line_gross
+
+        ticket_gross = efectivo_gross + transbank_gross
+        if ticket_gross <= 0:
+            return line_gross, 0
+
+        efectivo_part = round_money(
+            Decimal(line_gross) * Decimal(efectivo_gross) / Decimal(ticket_gross),
+        )
+        return efectivo_part, line_gross - efectivo_part
+
     def _line_net_payment_split(self, ticket: Ticket, line_net: int) -> tuple[int, int]:
         """Reparte el neto de la línea entre efectivo y tarjeta (Transbank/boleta/factura)."""
         if line_net <= 0 or ticket.id is None:
@@ -540,6 +561,103 @@ class WasherPayService:
         if total <= subtotal:
             return line_net
         return round_money(Decimal(line_net) * Decimal(total) / Decimal(subtotal))
+
+    def _washer_sales_gross_by_payment(
+        self,
+        line_contexts: list[_WasherPayLineContext],
+    ) -> tuple[int, int, int]:
+        """Venta bruta por medio de pago, sin aplicar % del lavador."""
+        efectivo = 0
+        card = 0
+        seen: set[tuple[int, int]] = set()
+        for ctx in line_contexts:
+            key = (ctx.ticket.id or 0, ctx.line.id or 0)
+            if key in seen:
+                continue
+            seen.add(key)
+            efectivo_part, card_part = self._line_gross_payment_split(
+                ctx.ticket,
+                ctx.full_line_gross,
+            )
+            efectivo += efectivo_part
+            card += card_part
+        return efectivo, card, efectivo + card
+
+    def _group_sales_gross_by_payment(
+        self,
+        *,
+        branch_office_id: int,
+        group_id: int,
+        day: date,
+    ) -> tuple[int, int, int]:
+        efectivo = 0
+        card = 0
+        seen: set[tuple[int, int]] = set()
+        for line, ticket, _line_rows, line_gross, _line_net in self._iter_branch_payable_lines(
+            branch_office_id=branch_office_id,
+            day=day,
+        ):
+            if line.washer_daily_group_id != group_id:
+                continue
+            key = (ticket.id or 0, line.id or 0)
+            if key in seen:
+                continue
+            seen.add(key)
+            efectivo_part, card_part = self._line_gross_payment_split(ticket, line_gross)
+            efectivo += efectivo_part
+            card += card_part
+        return efectivo, card, efectivo + card
+
+    def _card_iva_from_gross(self, card_gross: int) -> int:
+        if card_gross <= 0:
+            return 0
+        raw = card_gross - round_money(Decimal(card_gross) / TICKET_IVA_GROSS_FACTOR)
+        return self._apply_coin_round(raw)
+
+    def _build_pay_breakdown(
+        self,
+        *,
+        gross_total: int,
+        card_gross: int,
+        effective_pct: Decimal,
+        final_amount: int,
+    ) -> list[WasherPayBreakdownRow]:
+        card_iva = self._card_iva_from_gross(card_gross)
+        net_after_iva = max(0, gross_total - card_iva)
+        commission_before = round_money(
+            Decimal(net_after_iva) * effective_pct / Decimal("100"),
+        )
+        pct_label = self._format_percentage_display(effective_pct)
+        rows: list[WasherPayBreakdownRow] = [
+            WasherPayBreakdownRow(label="Monto bruto", amount=gross_total),
+            WasherPayBreakdownRow(
+                label="Tarjeta (Transbank + boleta + factura)",
+                amount=card_gross,
+            ),
+            WasherPayBreakdownRow(label="IVA (solo tarjeta)", amount=card_iva),
+            WasherPayBreakdownRow(label="Total menos IVA", amount=net_after_iva),
+            WasherPayBreakdownRow(
+                label=f"Comisión ({pct_label})",
+                amount=commission_before,
+            ),
+        ]
+        if commission_before != final_amount:
+            rows.append(
+                WasherPayBreakdownRow(
+                    label="Total a pagar (redondeo)",
+                    amount=final_amount,
+                    emphasis=True,
+                ),
+            )
+        else:
+            rows.append(
+                WasherPayBreakdownRow(
+                    label="Total a pagar",
+                    amount=final_amount,
+                    emphasis=True,
+                ),
+            )
+        return rows
 
     def _washer_sales_liquid_by_payment(
         self,
@@ -1303,6 +1421,31 @@ class WasherPayService:
                         ),
                     )
 
+        if group_id is not None and group_id > 0:
+            _ef_gross, card_gross, gross_total = self._group_sales_gross_by_payment(
+                branch_office_id=branch_office_id,
+                group_id=group_id,
+                day=day,
+            )
+            member_ids = self._group_member_ids_for_pay_day(group_id, day=day)
+            breakdown_pct = self._group_average_effective_pct(
+                member_ids=member_ids,
+                day=day,
+                sales_map=sales_map,
+            )
+        else:
+            _ef_gross, card_gross, gross_total = self._washer_sales_gross_by_payment(
+                line_contexts,
+            )
+            breakdown_pct = effective_pct
+
+        pay_breakdown = self._build_pay_breakdown(
+            gross_total=gross_total,
+            card_gross=card_gross,
+            effective_pct=breakdown_pct,
+            final_amount=amount,
+        )
+
         return WasherPayDetailResponse(
             washer_id=str(washer_id),
             full_name=self._washer_full_name(washer_id),
@@ -1334,4 +1477,5 @@ class WasherPayService:
                 day=day,
                 washer_id=washer_id,
             ),
+            pay_breakdown=pay_breakdown,
         )

@@ -53,6 +53,12 @@ class WasherPayGroupMemberItem(BaseModel):
     amount: int = Field(ge=0)
 
 
+class WasherPayBreakdownRow(BaseModel):
+    label: str
+    amount: int = Field(ge=0)
+    emphasis: bool = False
+
+
 class WasherPayDetailResponse(BaseModel):
     washer_id: str
     full_name: str
@@ -96,6 +102,7 @@ class WasherPayDetailResponse(BaseModel):
     amount: int = Field(ge=0)
     group_member_items: list[WasherPayGroupMemberItem] = Field(default_factory=list)
     payment_status: WasherPayPaymentStatus = "unpaid"
+    pay_breakdown: list[WasherPayBreakdownRow] = Field(default_factory=list)
 
 
 class WasherPayStatusUpdate(BaseModel):
