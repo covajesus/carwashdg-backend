@@ -47,13 +47,22 @@ class WasherPayDetailLine(BaseModel):
     amount: int = Field(ge=0)
 
 
+class WasherPayGroupMemberItem(BaseModel):
+    washer_id: str
+    full_name: str
+    amount: int = Field(ge=0)
+
+
 class WasherPayDetailResponse(BaseModel):
     washer_id: str
     full_name: str
     branch_office_id: str
     branch_name: str
     date: str
-    daily_sales: int = Field(ge=0)
+    daily_sales: int = Field(
+        ge=0,
+        description="Total vendido del día (neto, sin aplicar % del lavador)",
+    )
     daily_goal: str | None = None
     daily_goal_percentage: str | None = None
     week_percentage: str | None = None
@@ -77,6 +86,7 @@ class WasherPayDetailResponse(BaseModel):
     )
     items: list[WasherPayDetailLine]
     amount: int = Field(ge=0)
+    group_member_items: list[WasherPayGroupMemberItem] = Field(default_factory=list)
     payment_status: WasherPayPaymentStatus = "unpaid"
 
 

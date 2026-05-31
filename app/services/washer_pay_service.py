@@ -28,6 +28,7 @@ from app.schemas.user import UserPublic
 from app.schemas.washer_pay import (
     WasherPayDetailLine,
     WasherPayDetailResponse,
+    WasherPayGroupMemberItem,
     WasherPayPaymentStatus,
     WasherPayStatusResponse,
     WasherPaySummaryItem,
@@ -508,6 +509,44 @@ class WasherPayService:
         delta = target - total
         efectivo = max(0, efectivo + delta)
         return efectivo, card, target
+
+    def _washer_sales_volume(
+        self,
+        line_contexts: list[_WasherPayLineContext],
+    ) -> int:
+        """Total vendido (neto) atribuido al lavador, sin aplicar %."""
+        total = 0
+        seen: set[tuple[int, int]] = set()
+        for ctx in line_contexts:
+            key = (ctx.ticket.id or 0, ctx.line.id or 0)
+            if key in seen:
+                continue
+            seen.add(key)
+            total += ctx.full_line_net
+        return total
+
+    def _group_sales_volume(
+        self,
+        *,
+        branch_office_id: int,
+        group_id: int,
+        day: date,
+    ) -> int:
+        """Total vendido (neto) del grupo, sin aplicar %."""
+        total = 0
+        seen: set[tuple[int, int]] = set()
+        for line, ticket, _line_rows, line_net in self._iter_branch_payable_lines(
+            branch_office_id=branch_office_id,
+            day=day,
+        ):
+            if line.washer_daily_group_id != group_id:
+                continue
+            key = (ticket.id or 0, line.id or 0)
+            if key in seen:
+                continue
+            seen.add(key)
+            total += line_net
+        return total
 
     def _group_name(self, group_id: int) -> str:
         row = self.db.get(WasherDailyGroup, group_id)
@@ -1010,7 +1049,7 @@ class WasherPayService:
             raise WasherPayValidationError("El lavador no pertenece a esta sucursal")
 
         assignment = self._branch_washer.get_active_assignment_for_washer(washer_id)
-        amount, _, detail_lines, daily_sales = self._compute_washer_pay(
+        amount, _, detail_lines, daily_sales_for_goal = self._compute_washer_pay(
             branch_office_id=branch_office_id,
             washer_id=washer_id,
             day=day,
@@ -1024,14 +1063,22 @@ class WasherPayService:
         goal_amount = self._parse_goal_amount(
             assignment.daily_goal if assignment else None,
         )
-        goal_met = goal_amount > 0 and daily_sales >= goal_amount
+        if group_id is not None and group_id > 0:
+            daily_sales_volume = self._group_sales_volume(
+                branch_office_id=branch_office_id,
+                group_id=group_id,
+                day=day,
+            )
+        else:
+            daily_sales_volume = self._washer_sales_volume(line_contexts)
+        goal_met = goal_amount > 0 and daily_sales_volume >= goal_amount
 
         is_sunday = day.weekday() == 6
         base_pct = self._percentage_for_date(assignment, day=day) if assignment else Decimal("0")
         boost_pct = self._goal_percentage_boost(
             assignment,
             day=day,
-            daily_sales=daily_sales,
+            daily_sales=daily_sales_for_goal,
         )
         effective_pct = base_pct + boost_pct
         sales_map = self._branch_washer_attributed_sales(
@@ -1100,13 +1147,35 @@ class WasherPayService:
             amount,
         )
 
+        group_member_items: list[WasherPayGroupMemberItem] = []
+        if group_id is not None and group_id > 0:
+            member_ids = self._washer_groups.member_ids_for_group_on_date(
+                group_id,
+                day=day,
+            )
+            for member_id in member_ids:
+                member_amount, _, _, _ = self._compute_washer_pay(
+                    branch_office_id=branch_office_id,
+                    washer_id=member_id,
+                    day=day,
+                )
+                if member_amount <= 0:
+                    continue
+                group_member_items.append(
+                    WasherPayGroupMemberItem(
+                        washer_id=str(member_id),
+                        full_name=self._washer_full_name(member_id),
+                        amount=member_amount,
+                    ),
+                )
+
         return WasherPayDetailResponse(
             washer_id=str(washer_id),
             full_name=self._washer_full_name(washer_id),
             branch_office_id=str(branch_office_id),
             branch_name=branch.branch_office,
             date=day.isoformat(),
-            daily_sales=daily_sales,
+            daily_sales=daily_sales_volume,
             daily_goal=assignment.daily_goal if assignment else None,
             daily_goal_percentage=(
                 assignment.daily_goal_percentage if assignment else None
@@ -1123,6 +1192,7 @@ class WasherPayService:
             sales_total_net=pay_total,
             items=detail_lines,
             amount=amount,
+            group_member_items=group_member_items,
             payment_status=self._get_payment_status(
                 branch_office_id=branch_office_id,
                 day=day,
