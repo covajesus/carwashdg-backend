@@ -1165,6 +1165,10 @@ class WasherPayService:
             day=day,
             washer_ids=washer_ids,
         )
+        sales_map = self._branch_washer_attributed_sales(
+            branch_office_id=branch_office_id,
+            day=day,
+        )
         washer_by_id: dict[int, dict[str, object]] = {}
         for washer_id in washer_ids:
             amount, ticket_count, _, daily_sales = self._compute_washer_pay(
@@ -1248,10 +1252,20 @@ class WasherPayService:
             if group_amount <= 0 and not group_ticket_ids:
                 continue
             member_pcts = [
-                str(washer_by_id[member_id]["applied_percentage"])
+                self._format_percentage_display(
+                    self._effective_percentage(
+                        assignment_row,
+                        day=day,
+                        daily_sales=sales_map.get(member_id, 0),
+                    ),
+                )
                 for member_id in member_ids
-                if member_id in washer_by_id
-                and washer_by_id[member_id].get("applied_percentage") is not None
+                if (
+                    assignment_row := self._branch_washer.get_active_assignment_for_washer(
+                        member_id,
+                    )
+                )
+                is not None
             ]
             paying_members = list(member_ids) if group_amount > 0 else []
             group_status: WasherPayPaymentStatus = (
