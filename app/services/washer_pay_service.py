@@ -511,6 +511,53 @@ class WasherPayService:
         efectivo = max(0, efectivo + delta)
         return efectivo, card, target
 
+    def _washer_sales_liquid_by_payment(
+        self,
+        line_contexts: list[_WasherPayLineContext],
+    ) -> tuple[int, int, int]:
+        """Venta líquida (neto) por medio de pago, sin aplicar % del lavador."""
+        efectivo = 0
+        card = 0
+        seen: set[tuple[int, int]] = set()
+        for ctx in line_contexts:
+            key = (ctx.ticket.id or 0, ctx.line.id or 0)
+            if key in seen:
+                continue
+            seen.add(key)
+            efectivo_part, card_part = self._line_net_payment_split(
+                ctx.ticket,
+                ctx.full_line_net,
+            )
+            efectivo += efectivo_part
+            card += card_part
+        return efectivo, card, efectivo + card
+
+    def _group_sales_liquid_by_payment(
+        self,
+        *,
+        branch_office_id: int,
+        group_id: int,
+        day: date,
+    ) -> tuple[int, int, int]:
+        """Venta líquida (neto) del grupo por medio de pago, sin aplicar %."""
+        efectivo = 0
+        card = 0
+        seen: set[tuple[int, int]] = set()
+        for line, ticket, _line_rows, _line_gross, line_net in self._iter_branch_payable_lines(
+            branch_office_id=branch_office_id,
+            day=day,
+        ):
+            if line.washer_daily_group_id != group_id:
+                continue
+            key = (ticket.id or 0, line.id or 0)
+            if key in seen:
+                continue
+            seen.add(key)
+            efectivo_part, card_part = self._line_net_payment_split(ticket, line_net)
+            efectivo += efectivo_part
+            card += card_part
+        return efectivo, card, efectivo + card
+
     def _washer_sales_volume(
         self,
         line_contexts: list[_WasherPayLineContext],
@@ -1150,6 +1197,17 @@ class WasherPayService:
             amount,
         )
 
+        if group_id is not None and group_id > 0:
+            _, _, sales_liquid_total = self._group_sales_liquid_by_payment(
+                branch_office_id=branch_office_id,
+                group_id=group_id,
+                day=day,
+            )
+        else:
+            _, _, sales_liquid_total = self._washer_sales_liquid_by_payment(
+                line_contexts,
+            )
+
         group_member_items: list[WasherPayGroupMemberItem] = []
         if group_id is not None and group_id > 0:
             member_ids = self._washer_groups.member_ids_for_group_on_date(
@@ -1193,6 +1251,7 @@ class WasherPayService:
             sales_efectivo_net=pay_efectivo,
             sales_card_net=pay_card,
             sales_total_net=pay_total,
+            sales_liquid_total=sales_liquid_total,
             items=detail_lines,
             amount=amount,
             group_member_items=group_member_items,

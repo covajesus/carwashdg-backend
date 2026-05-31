@@ -84,6 +84,10 @@ class WasherPayDetailResponse(BaseModel):
         ge=0,
         description="Total a pagar (efectivo + Transbank/boleta/factura)",
     )
+    sales_liquid_total: int = Field(
+        ge=0,
+        description="Total vendido líquido (efectivo + Transbank/boleta/factura, sin %)",
+    )
     items: list[WasherPayDetailLine]
     amount: int = Field(ge=0)
     group_member_items: list[WasherPayGroupMemberItem] = Field(default_factory=list)
