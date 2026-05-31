@@ -511,6 +511,19 @@ class WasherPayService:
         efectivo = max(0, efectivo + delta)
         return efectivo, card, target
 
+    def _line_bruto_from_net(self, ticket: Ticket, line_net: int) -> int:
+        """Bruto (con IVA) proporcional a partir del neto de línea."""
+        if line_net <= 0 or ticket.id is None:
+            return 0
+        pricing = self._tickets._ticket_pricing(ticket.id, ticket)
+        subtotal = pricing["subtotal"]
+        total = pricing["total"]
+        if subtotal <= 0:
+            return line_net
+        if total <= subtotal:
+            return line_net
+        return round_money(Decimal(line_net) * Decimal(total) / Decimal(subtotal))
+
     def _washer_sales_liquid_by_payment(
         self,
         line_contexts: list[_WasherPayLineContext],
@@ -570,7 +583,7 @@ class WasherPayService:
             if key in seen:
                 continue
             seen.add(key)
-            total += ctx.full_line_gross
+            total += self._line_bruto_from_net(ctx.ticket, ctx.full_line_net)
         return total
 
     def _group_sales_volume(
@@ -583,7 +596,7 @@ class WasherPayService:
         """Total vendido (bruto) del grupo, sin aplicar %."""
         total = 0
         seen: set[tuple[int, int]] = set()
-        for line, ticket, _line_rows, line_gross, _line_net in self._iter_branch_payable_lines(
+        for line, ticket, _line_rows, _line_gross, line_net in self._iter_branch_payable_lines(
             branch_office_id=branch_office_id,
             day=day,
         ):
@@ -593,7 +606,7 @@ class WasherPayService:
             if key in seen:
                 continue
             seen.add(key)
-            total += line_gross
+            total += self._line_bruto_from_net(ticket, line_net)
         return total
 
     def _group_name(self, group_id: int) -> str:
@@ -1198,13 +1211,13 @@ class WasherPayService:
         )
 
         if group_id is not None and group_id > 0:
-            _, _, sales_liquid_total = self._group_sales_liquid_by_payment(
+            _, _, daily_sales_net = self._group_sales_liquid_by_payment(
                 branch_office_id=branch_office_id,
                 group_id=group_id,
                 day=day,
             )
         else:
-            _, _, sales_liquid_total = self._washer_sales_liquid_by_payment(
+            _, _, daily_sales_net = self._washer_sales_liquid_by_payment(
                 line_contexts,
             )
 
@@ -1237,6 +1250,7 @@ class WasherPayService:
             branch_name=branch.branch_office,
             date=day.isoformat(),
             daily_sales=daily_sales_volume,
+            daily_sales_net=daily_sales_net,
             daily_goal=assignment.daily_goal if assignment else None,
             daily_goal_percentage=(
                 assignment.daily_goal_percentage if assignment else None
@@ -1251,7 +1265,7 @@ class WasherPayService:
             sales_efectivo_net=pay_efectivo,
             sales_card_net=pay_card,
             sales_total_net=pay_total,
-            sales_liquid_total=sales_liquid_total,
+            sales_liquid_total=pay_total,
             items=detail_lines,
             amount=amount,
             group_member_items=group_member_items,

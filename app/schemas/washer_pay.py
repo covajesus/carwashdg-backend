@@ -63,6 +63,10 @@ class WasherPayDetailResponse(BaseModel):
         ge=0,
         description="Total vendido del día (bruto, sin aplicar % del lavador)",
     )
+    daily_sales_net: int = Field(
+        ge=0,
+        description="Total vendido del día (líquido/neto, sin aplicar % del lavador)",
+    )
     daily_goal: str | None = None
     daily_goal_percentage: str | None = None
     week_percentage: str | None = None
@@ -86,7 +90,7 @@ class WasherPayDetailResponse(BaseModel):
     )
     sales_liquid_total: int = Field(
         ge=0,
-        description="Total vendido líquido (efectivo + Transbank/boleta/factura, sin %)",
+        description="Total líquido a pagar (efectivo + Transbank/boleta/factura ganado)",
     )
     items: list[WasherPayDetailLine]
     amount: int = Field(ge=0)
