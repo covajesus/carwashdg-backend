@@ -1,4 +1,6 @@
-from fastapi import APIRouter, HTTPException, status
+from datetime import date
+
+from fastapi import APIRouter, HTTPException, Query, status
 
 from app.api.deps import CurrentUserDep, WasherDailyGroupServiceDep
 from app.schemas.washer_daily_group import (
@@ -43,9 +45,14 @@ def ticket_washer_options(
     branch_office_id: int,
     user: CurrentUserDep,
     service: WasherDailyGroupServiceDep,
+    group_date: date | None = Query(default=None, alias="date"),
 ) -> TicketWasherOptionsResponse:
     try:
-        return service.ticket_washer_options(user, branch_office_id=branch_office_id)
+        return service.ticket_washer_options(
+            user,
+            branch_office_id=branch_office_id,
+            group_date=group_date,
+        )
     except WasherDailyGroupValidationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
