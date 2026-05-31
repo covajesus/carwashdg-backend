@@ -83,7 +83,9 @@ class WasherPayService:
         text = format(value, "f")
         if "." in text:
             text = text.rstrip("0").rstrip(".")
-        return text
+        if not text:
+            return "0%"
+        return f"{text}%"
 
     @staticmethod
     def _goal_percentage_boost_applies_on_day(day: date) -> bool:
@@ -638,15 +640,20 @@ class WasherPayService:
             self._waterfall_pay_steps(gross_total, card_gross, effective_pct)
         )
         pct_label = self._format_percentage_display(effective_pct)
+        commission_label = (
+            f"Comisión ({pct_label} promedio del grupo)"
+            if is_group
+            else f"Comisión ({pct_label})"
+        )
         first_label = "Total del Grupo" if is_group else "Total lavador"
         final_label = "Total a pagar por el grupo" if is_group else "Total a pagar"
         rows: list[WasherPayBreakdownRow] = [
             WasherPayBreakdownRow(label=first_label, amount=gross_total),
             WasherPayBreakdownRow(label="Tarjeta", amount=card_gross),
-            WasherPayBreakdownRow(label="IVA", amount=card_iva),
+            WasherPayBreakdownRow(label="IVA (19%)", amount=card_iva),
             WasherPayBreakdownRow(label="Total calculado", amount=total_calculado),
             WasherPayBreakdownRow(
-                label=f"Comisión ({pct_label})",
+                label=commission_label,
                 amount=commission_before,
             ),
         ]
