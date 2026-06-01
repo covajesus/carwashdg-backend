@@ -1,5 +1,5 @@
--- Fotos de ticket en base64 requieren más de VARCHAR(500).
--- Ejecutar una vez en producción si photo_url es VARCHAR(500) o falta la columna.
+-- Fotos de ticket en base64: ampliar columna (VARCHAR(500) es insuficiente).
+-- Ejecutar una vez en producción.
 
 ALTER TABLE tickets
-  MODIFY COLUMN photo_url MEDIUMTEXT NULL;
+  MODIFY COLUMN photo_url TEXT NULL;

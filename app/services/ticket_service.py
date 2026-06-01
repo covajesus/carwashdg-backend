@@ -721,12 +721,18 @@ class TicketService:
         row = self._get_visible_ticket(ticket_id, user)
         return self.to_public(row)
 
-    def _normalize_photo(value: str | None) -> str | None:
+    _MAX_PHOTO_URL_CHARS = 65_535
+
+    def _normalize_photo(self, value: str | None) -> str | None:
         text = (value or "").strip()
         if not text:
             return None
         if text.startswith("data:image/") and ("," not in text or len(text) < 120):
             return None
+        if len(text) > self._MAX_PHOTO_URL_CHARS:
+            raise TicketValidationError(
+                "La foto es demasiado grande. Tome otra imagen más cercana o con menos resolución.",
+            )
         return text
 
     def create(self, data: TicketCreate) -> TicketCreateResponse:
