@@ -1,5 +1,5 @@
--- Fotos de ticket en base64: ampliar columna (VARCHAR(500) es insuficiente).
--- Ejecutar una vez en producción.
+-- Fotos en base64 superan TEXT (~64 KB). Esta foto puede superar 200 KB.
+-- Ejecutar UNA VEZ en el MySQL de producción:
 
 ALTER TABLE tickets
-  MODIFY COLUMN photo_url TEXT NULL;
+  MODIFY COLUMN photo_url MEDIUMTEXT NULL;

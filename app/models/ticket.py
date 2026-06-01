@@ -1,6 +1,7 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, Text
+from sqlalchemy import DateTime, Integer, String
+from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -13,7 +14,7 @@ class Ticket(Base):
     customer_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     car_type_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     license_plate_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    photo_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    photo_url: Mapped[str | None] = mapped_column(MEDIUMTEXT, nullable=True)
     payment_type_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     payment_efectivo_amount: Mapped[int | None] = mapped_column(Integer, nullable=True)
     payment_transbank_amount: Mapped[int | None] = mapped_column(Integer, nullable=True)
