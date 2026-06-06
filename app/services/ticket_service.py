@@ -1051,6 +1051,22 @@ class TicketService:
             if "status_id" in patch:
                 row.status_id = patch["status_id"]
         elif user.role == "manager":
+            payment_patch_keys = {
+                "payment_type_id",
+                "payment_efectivo_amount",
+                "payment_transbank_amount",
+                "needs_tax_receipt",
+                "subtotal",
+                "tax",
+                "total",
+                "gross_amount",
+                "washer_id",
+                "washer_daily_group_id",
+            }
+            if payment_patch_keys & set(patch.keys()):
+                raise TicketValidationError(
+                    "Solo el administrador puede editar el cobro del ticket",
+                )
             disallowed = set(patch.keys()) - {"status_id"}
             if disallowed:
                 raise TicketValidationError("No tiene permiso para modificar este ticket")
