@@ -919,6 +919,72 @@ class TicketService:
         row.tax = str(pricing["tax"])
         row.total = str(pricing["total"])
 
+    def _ticket_can_edit_payment_type(self, row: Ticket) -> bool:
+        if self._ticket_has_payment(row):
+            return True
+        if row.status_id == TICKET_STATUS_PAID_ID:
+            return True
+        closed_status_id = self._resolve_closed_status_id()
+        return closed_status_id is not None and row.status_id == closed_status_id
+
+    def _apply_ticket_payment_correction(self, row: Ticket, patch: dict) -> None:
+        if not self._ticket_can_edit_payment_type(row):
+            raise TicketValidationError(
+                "El método de pago se define al cobrar el ticket",
+            )
+        ticket_total = parse_ticket_total(row.total)
+        if ticket_total is None or ticket_total <= 0:
+            raise TicketValidationError("El ticket no tiene un total válido")
+
+        split_efectivo = patch.get("payment_efectivo_amount")
+        split_transbank = patch.get("payment_transbank_amount")
+        has_split = split_efectivo is not None or split_transbank is not None
+
+        if has_split:
+            efectivo = round_money(split_efectivo or 0)
+            transbank = round_money(split_transbank or 0)
+            if efectivo <= 0 or transbank <= 0:
+                raise TicketValidationError(
+                    "Indique un monto mayor a 0 en efectivo y en Transbank",
+                )
+            mixed_pricing = split_mixed_payment_totals(efectivo, transbank)
+            if mixed_pricing["total"] != ticket_total:
+                raise TicketValidationError(
+                    "Efectivo + Transbank debe sumar el total del ticket",
+                )
+            row.payment_type_id = PAYMENT_TYPE_MIXED
+            row.payment_efectivo_amount = efectivo
+            row.payment_transbank_amount = transbank
+            row.subtotal = str(mixed_pricing["subtotal"])
+            row.tax = str(mixed_pricing["tax"])
+            row.total = str(mixed_pricing["total"])
+            return
+
+        payment_type_id = patch.get("payment_type_id")
+        if payment_type_id not in (PAYMENT_TYPE_EFECTIVO, PAYMENT_TYPE_TRANSBANK):
+            raise TicketValidationError("Seleccione Efectivo o Transbank")
+
+        needs_tax_receipt = patch.get("needs_tax_receipt")
+        if payment_type_id == PAYMENT_TYPE_TRANSBANK:
+            apply_iva = True
+        else:
+            apply_iva = bool(needs_tax_receipt) if needs_tax_receipt is not None else False
+
+        total = round_money(patch.get("total", ticket_total))
+        if total != ticket_total:
+            raise TicketValidationError("No se puede cambiar el monto de un ticket ya cobrado")
+        pricing = ticket_totals_from_subtotal(total, apply_iva=apply_iva)
+        row.payment_type_id = payment_type_id
+        if payment_type_id == PAYMENT_TYPE_EFECTIVO:
+            row.payment_efectivo_amount = total
+            row.payment_transbank_amount = 0
+        else:
+            row.payment_efectivo_amount = 0
+            row.payment_transbank_amount = total
+        row.subtotal = str(pricing["subtotal"])
+        row.tax = str(pricing["tax"])
+        row.total = str(pricing["total"])
+
     def update(self, ticket_id: int, data: TicketUpdate, user: UserPublic) -> TicketPublic:
         row = self._get_visible_ticket(ticket_id, user)
 
@@ -927,11 +993,23 @@ class TicketService:
             return self.to_public(row)
 
         if user.role == "admin":
-            allowed = {"gross_amount", "status_id", "washer_id", "washer_daily_group_id"}
+            allowed = {
+                "gross_amount",
+                "status_id",
+                "washer_id",
+                "washer_daily_group_id",
+                "payment_type_id",
+                "payment_efectivo_amount",
+                "payment_transbank_amount",
+                "needs_tax_receipt",
+                "subtotal",
+                "tax",
+                "total",
+            }
             disallowed = set(patch.keys()) - allowed
             if disallowed:
                 raise TicketValidationError(
-                    "Solo puede modificar el monto, el lavador o el estatus del ticket",
+                    "Solo puede modificar el monto, lavador, estatus o método de pago",
                 )
             if row.payment_type_id in PAID_PAYMENT_TYPE_IDS:
                 if "gross_amount" in patch:
@@ -940,6 +1018,17 @@ class TicketService:
                     raise TicketValidationError(
                         "No se puede cambiar el lavador de un ticket ya cobrado",
                     )
+            payment_patch_keys = {
+                "payment_type_id",
+                "payment_efectivo_amount",
+                "payment_transbank_amount",
+                "needs_tax_receipt",
+                "subtotal",
+                "tax",
+                "total",
+            }
+            if payment_patch_keys & set(patch.keys()):
+                self._apply_ticket_payment_correction(row, patch)
             if "gross_amount" in patch:
                 self._apply_ticket_gross_amount(row, patch["gross_amount"])
             if "washer_id" in patch or "washer_daily_group_id" in patch:

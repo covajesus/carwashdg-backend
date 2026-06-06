@@ -41,13 +41,19 @@ class TicketCreate(BaseModel):
 
 
 class TicketUpdate(BaseModel):
-    """Administrador: `gross_amount`, lavador/grupo. Gerente: solo `status_id` (p. ej. No pagado)."""
+    """Administrador: monto, lavador/grupo o método de pago. Gerente: solo `status_id`."""
 
     customer_id: int | None = None
     car_type_id: int | None = None
     license_plate_id: str | None = Field(default=None, max_length=255)
     photo_url: str | None = None
-    payment_type_id: int | None = None
+    payment_type_id: int | None = Field(default=None, ge=1, le=2)
+    payment_efectivo_amount: int | None = Field(default=None, ge=0)
+    payment_transbank_amount: int | None = Field(default=None, ge=0)
+    needs_tax_receipt: bool | None = None
+    subtotal: int | None = Field(default=None, ge=0)
+    tax: int | None = Field(default=None, ge=0)
+    total: int | None = Field(default=None, gt=0)
     status_id: int | None = None
     tip: str | None = Field(default=None, max_length=255)
     gross_amount: int | None = Field(default=None, ge=1)
