@@ -1165,6 +1165,32 @@ class WasherPayService:
         avg = sum(parsed, Decimal("0")) / Decimal(len(parsed))
         return self._format_percentage_display(avg)
 
+    def _pay_assignees_for_day(
+        self,
+        *,
+        branch_office_id: int,
+        day: date,
+    ) -> tuple[set[int], set[int]]:
+        """
+        Lavadores y grupos con tickets cobrados ese día.
+        - Línea con grupo → solo cuenta el grupo (no cada miembro).
+        - Línea sin grupo → cuenta el lavador individual (aunque esté en un grupo ese día).
+        """
+        solo_washer_ids: set[int] = set()
+        group_ids: set[int] = set()
+        for line, _ticket, line_rows, _line_gross, _line_net in self._iter_branch_payable_lines(
+            branch_office_id=branch_office_id,
+            day=day,
+        ):
+            group_id = line.washer_daily_group_id
+            if group_id is not None and group_id > 0:
+                group_ids.add(group_id)
+                continue
+            washer_id = self._line_attributed_washer_id(line, line_rows)
+            if washer_id is not None and washer_id > 0:
+                solo_washer_ids.add(washer_id)
+        return solo_washer_ids, group_ids
+
     def summary_by_branch_and_date(
         self,
         user: UserPublic,
@@ -1214,17 +1240,18 @@ class WasherPayService:
                 "payment_status": status_map.get(washer_id, "unpaid"),
             }
 
-        options = self._washer_groups.ticket_washer_options(
-            user,
+        solo_washer_ids, active_group_ids = self._pay_assignees_for_day(
             branch_office_id=branch_office_id,
-            group_date=day,
+            day=day,
         )
         assignees: list[tuple[str, int, str]] = []
-        for group in options.groups:
-            assignees.append(("group", int(group.id), group.name.strip()))
-        for washer in options.washers:
-            assignees.append(("washer", int(washer.id), washer.full_name.strip()))
-        assignees.sort(key=lambda row: row[2].lower())
+        for group_id in sorted(active_group_ids, key=lambda gid: self._group_name(gid).lower()):
+            assignees.append(("group", group_id, self._group_name(group_id)))
+        for washer_id in sorted(
+            solo_washer_ids,
+            key=lambda wid: self._washer_full_name(wid).lower(),
+        ):
+            assignees.append(("washer", washer_id, self._washer_full_name(washer_id)))
 
         items: list[WasherPaySummaryItem] = []
         for kind, entity_id, display_name in assignees:
