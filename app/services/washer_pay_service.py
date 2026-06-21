@@ -346,22 +346,19 @@ class WasherPayService:
         ticket: Ticket,
         ticket_rows: list[TicketBranchOfficeService],
     ) -> dict[int, int]:
-        """Gross per service line; avoids counting the full ticket on every line."""
+        """Bruto cobrado por línea; reparte ticket.total (igual que la columna TOTAL del ticket)."""
         payable = self._payable_service_lines(ticket_rows)
         if not payable or ticket.id is None:
             return {}
 
         pricing = self._tickets._ticket_pricing(ticket.id, ticket)
-        ticket_subtotal = max(0, pricing["subtotal"])
         ticket_total = max(0, pricing["total"])
+        if ticket_total <= 0:
+            return {}
 
         if len(payable) == 1:
             row = payable[0]
-            line_id = row.id or 0
-            gross = max(0, TicketLineService._resolved_line_total(row))
-            if gross <= 0:
-                gross = ticket_total
-            return {line_id: gross}
+            return {row.id or 0: ticket_total}
 
         raw: dict[int, int] = {}
         for row in payable:
@@ -369,14 +366,22 @@ class WasherPayService:
 
         total_raw = sum(raw.values())
         if total_raw <= 0:
-            share = round_money(Decimal(ticket_subtotal) / Decimal(len(payable)))
+            share = round_money(Decimal(ticket_total) / Decimal(len(payable)))
             return {row.id or 0: share for row in payable}
 
-        if total_raw > ticket_subtotal:
-            share = round_money(Decimal(ticket_subtotal) / Decimal(len(payable)))
-            return {row.id or 0: share for row in payable}
-
-        return raw
+        line_ids = list(raw.keys())
+        scaled: dict[int, int] = {}
+        allocated = 0
+        for index, line_id in enumerate(line_ids):
+            if index == len(line_ids) - 1:
+                scaled[line_id] = max(0, ticket_total - allocated)
+                continue
+            part = round_money(
+                Decimal(raw[line_id]) * Decimal(ticket_total) / Decimal(total_raw),
+            )
+            scaled[line_id] = part
+            allocated += part
+        return scaled
 
     def _gross_to_net(self, gross: int, *, ticket: Ticket) -> int:
         """Net line amount (subtotal, sin IVA) for washer commission."""
@@ -663,7 +668,7 @@ class WasherPayService:
             if is_group
             else f"Comisión ({pct_label})"
         )
-        first_label = "Total del Grupo" if is_group else "Total lavador"
+        first_label = "Total del Grupo" if is_group else "Total cobrado (bruto)"
         final_label = "Total a pagar por el grupo" if is_group else "Total a pagar"
         rows: list[WasherPayBreakdownRow] = [
             WasherPayBreakdownRow(label=first_label, amount=gross_total),
