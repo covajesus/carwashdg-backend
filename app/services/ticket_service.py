@@ -531,6 +531,8 @@ class TicketService:
         self,
         user: UserPublic,
         branch_office_id: int,
+        *,
+        revenue_day: date | None = None,
     ) -> dict[str, dict[str, int]]:
         scope = self._branch_scope_for_user(user)
         if scope == 0:
@@ -557,8 +559,14 @@ class TicketService:
             if not self.ticket_is_collected(row):
                 continue
 
-            revenue_day = self.ticket_revenue_day(row)
-            day_key = revenue_day.isoformat() if revenue_day is not None else "sin-fecha"
+            ticket_revenue_day = self.ticket_revenue_day(row)
+            if revenue_day is not None and ticket_revenue_day != revenue_day:
+                continue
+            day_key = (
+                ticket_revenue_day.isoformat()
+                if ticket_revenue_day is not None
+                else "sin-fecha"
+            )
 
             pricing = self._ticket_pricing(row.id, row)
             bucket = buckets[day_key]
@@ -658,6 +666,7 @@ class TicketService:
         user: UserPublic,
         *,
         branch_office_id: int,
+        revenue_day: date | None = None,
     ) -> TicketEarningsByBranchDateResponse:
         scope = self._branch_scope_for_user(user)
         if scope == 0:
@@ -674,8 +683,16 @@ class TicketService:
                 raise TicketValidationError("Branch not found")
             branch_name = branch.branch_office
 
-        buckets = self.ticket_earnings_date_buckets(user, branch_office_id)
-        CollectionService(self.db).merge_into_date_buckets(buckets, branch_office_id)
+        buckets = self.ticket_earnings_date_buckets(
+            user,
+            branch_office_id,
+            revenue_day=revenue_day,
+        )
+        CollectionService(self.db).merge_into_date_buckets(
+            buckets,
+            branch_office_id,
+            revenue_day=revenue_day,
+        )
 
         date_items: list[BranchEarningsByDateItem] = []
         for day_key, totals in buckets.items():

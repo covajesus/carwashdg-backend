@@ -201,9 +201,13 @@ class CollectionService:
         self,
         buckets: dict[str, dict[str, int]],
         branch_office_id: int,
+        *,
+        revenue_day: date | None = None,
     ) -> None:
         for row in self.list_manual_for_branch(branch_office_id):
             if row.collection_date is None or row.gross_amount <= 0:
+                continue
+            if revenue_day is not None and row.collection_date != revenue_day:
                 continue
             day_key = row.collection_date.isoformat()
             if day_key not in buckets:

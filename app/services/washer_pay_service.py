@@ -66,6 +66,16 @@ class WasherPayService:
         self._tickets = TicketService(db)
         self._lines = TicketLineService(db)
         self._washer_groups = WasherDailyGroupService(db)
+        self._payable_line_entries_cache: dict[
+            tuple[int, date],
+            list[tuple[
+                TicketBranchOfficeService,
+                Ticket,
+                list[TicketBranchOfficeService],
+                int,
+                int,
+            ]],
+        ] = {}
 
     def _coin_round_enabled(self) -> bool:
         row = self.db.get(Configuration, 1)
@@ -880,12 +890,25 @@ class WasherPayService:
     def _group_member_ids_for_pay_day(self, group_id: int, *, day: date) -> list[int]:
         return self._washer_groups.member_ids_for_group_on_date(group_id, day=day)
 
-    def _iter_branch_payable_lines(
+    def _branch_payable_line_entries(
         self,
         *,
         branch_office_id: int,
         day: date,
-    ):
+    ) -> list[
+        tuple[
+            TicketBranchOfficeService,
+            Ticket,
+            list[TicketBranchOfficeService],
+            int,
+            int,
+        ]
+    ]:
+        cache_key = (branch_office_id, day)
+        cached = self._payable_line_entries_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         branch_ticket_ids = self._tickets._ticket_ids_for_branch_subquery(branch_office_id)
         ticket_rows = self.db.scalars(
             select(Ticket)
@@ -896,6 +919,15 @@ class WasherPayService:
             .order_by(Ticket.id.asc()),
         ).all()
 
+        entries: list[
+            tuple[
+                TicketBranchOfficeService,
+                Ticket,
+                list[TicketBranchOfficeService],
+                int,
+                int,
+            ]
+        ] = []
         for ticket in ticket_rows:
             if ticket.id is None:
                 continue
@@ -927,7 +959,22 @@ class WasherPayService:
                 line_net = self._gross_to_net(gross, ticket=ticket)
                 if line_net <= 0:
                     continue
-                yield line, ticket, line_rows, gross, line_net
+                entries.append((line, ticket, line_rows, gross, line_net))
+
+        self._payable_line_entries_cache[cache_key] = entries
+        return entries
+
+    def _iter_branch_payable_lines(
+        self,
+        *,
+        branch_office_id: int,
+        day: date,
+    ):
+        for entry in self._branch_payable_line_entries(
+            branch_office_id=branch_office_id,
+            day=day,
+        ):
+            yield entry
 
     def _branch_washer_attributed_sales(
         self,
@@ -1295,6 +1342,11 @@ class WasherPayService:
         branch = self._ensure_branch_access(user, branch_office_id)
         day = self._parse_date(date_value)
 
+        solo_washer_ids, active_group_ids = self._pay_assignees_for_day(
+            branch_office_id=branch_office_id,
+            day=day,
+        )
+
         washer_ids = self._branch_washer.list_washer_ids_for_branch(branch_office_id)
         status_map = self._payment_status_map(
             branch_office_id=branch_office_id,
@@ -1307,7 +1359,7 @@ class WasherPayService:
             washer_ids=washer_ids,
         )
         washer_by_id: dict[int, dict[str, object]] = {}
-        for washer_id in washer_ids:
+        for washer_id in solo_washer_ids:
             manual_goal_met = manual_goal_met_map.get(washer_id, False)
             amount, ticket_count, _, solo_sales_gross = self._compute_washer_pay(
                 branch_office_id=branch_office_id,
@@ -1342,10 +1394,6 @@ class WasherPayService:
                 "payment_status": status_map.get(washer_id, "unpaid"),
             }
 
-        solo_washer_ids, active_group_ids = self._pay_assignees_for_day(
-            branch_office_id=branch_office_id,
-            day=day,
-        )
         assignees: list[tuple[str, int, str]] = []
         for group_id in sorted(active_group_ids, key=lambda gid: self._group_name(gid).lower()):
             assignees.append(("group", group_id, self._group_name(group_id)))
@@ -1426,7 +1474,7 @@ class WasherPayService:
                 "paid"
                 if paying_members
                 and all(
-                    washer_by_id.get(member_id, {}).get("payment_status") == "paid"
+                    status_map.get(member_id, "unpaid") == "paid"
                     for member_id in paying_members
                 )
                 else "unpaid"

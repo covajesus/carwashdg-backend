@@ -84,11 +84,13 @@ def earnings_by_branch_by_date(
     branch_office_id: int,
     service: TicketServiceDep,
     current_user: CurrentUserDep,
+    revenue_day: date | None = Query(default=None, alias="date"),
 ) -> TicketEarningsByBranchDateResponse:
     try:
         return service.earnings_by_branch_by_date(
             current_user,
             branch_office_id=branch_office_id,
+            revenue_day=revenue_day,
         )
     except TicketValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
