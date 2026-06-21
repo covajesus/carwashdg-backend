@@ -4,6 +4,8 @@ from app.api.deps import CurrentUserDep, WasherPayServiceDep
 from app.schemas.ticket import ErrorResponse
 from app.schemas.washer_pay import (
     WasherPayDetailResponse,
+    WasherPayManualGoalMetResponse,
+    WasherPayManualGoalMetUpdate,
     WasherPayStatusResponse,
     WasherPayStatusUpdate,
     WasherPaySummaryResponse,
@@ -89,6 +91,35 @@ def washer_pay_set_status(
             date_value=date_value,
             washer_id=washer_id,
             payment_status=body.payment_status,
+        )
+    except WasherPayValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch(
+    "/branch/{branch_office_id}/date/{date_value}/washer/{washer_id}/manual-goal-met",
+    response_model=WasherPayManualGoalMetResponse,
+    responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}},
+)
+def washer_pay_set_manual_goal_met(
+    branch_office_id: int,
+    date_value: str,
+    washer_id: int,
+    body: WasherPayManualGoalMetUpdate,
+    current_user: CurrentUserDep,
+    service: WasherPayServiceDep,
+) -> WasherPayManualGoalMetResponse:
+    if branch_office_id < 1:
+        raise HTTPException(status_code=400, detail="Sucursal no válida")
+    if washer_id < 1:
+        raise HTTPException(status_code=400, detail="Lavador no válido")
+    try:
+        return service.set_manual_goal_met(
+            current_user,
+            branch_office_id=branch_office_id,
+            date_value=date_value,
+            washer_id=washer_id,
+            manual_goal_met=body.manual_goal_met,
         )
     except WasherPayValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

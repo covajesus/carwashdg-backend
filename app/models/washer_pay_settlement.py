@@ -22,5 +22,10 @@ class WasherPaySettlement(Base):
     washer_id: Mapped[int] = mapped_column(Integer, nullable=False)
     pay_date: Mapped[date] = mapped_column(Date, nullable=False)
     is_paid: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    manual_goal_met: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+    )
     added_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     updated_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

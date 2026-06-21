@@ -103,10 +103,15 @@ class WasherPayDetailResponse(BaseModel):
     group_member_items: list[WasherPayGroupMemberItem] = Field(default_factory=list)
     payment_status: WasherPayPaymentStatus = "unpaid"
     pay_breakdown: list[WasherPayBreakdownRow] = Field(default_factory=list)
+    manual_goal_met: bool = False
 
 
 class WasherPayStatusUpdate(BaseModel):
     payment_status: WasherPayPaymentStatus
+
+
+class WasherPayManualGoalMetUpdate(BaseModel):
+    manual_goal_met: bool
 
 
 class WasherPayStatusResponse(BaseModel):
@@ -114,3 +119,10 @@ class WasherPayStatusResponse(BaseModel):
     branch_office_id: str
     date: str
     payment_status: WasherPayPaymentStatus
+
+
+class WasherPayManualGoalMetResponse(BaseModel):
+    washer_id: str
+    branch_office_id: str
+    date: str
+    manual_goal_met: bool

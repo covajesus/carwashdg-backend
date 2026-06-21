@@ -30,6 +30,8 @@ from app.schemas.washer_pay import (
     WasherPayDetailLine,
     WasherPayDetailResponse,
     WasherPayGroupMemberItem,
+    WasherPayManualGoalMetResponse,
+    WasherPayManualGoalMetUpdate,
     WasherPayPaymentStatus,
     WasherPayStatusResponse,
     WasherPaySummaryItem,
@@ -264,6 +266,107 @@ class WasherPayService:
             return "unpaid"
         return self._status_from_paid(row.is_paid)
 
+    def _manual_goal_met_map(
+        self,
+        *,
+        branch_office_id: int,
+        day: date,
+        washer_ids: list[int],
+    ) -> dict[int, bool]:
+        if not washer_ids:
+            return {}
+        rows = self.db.scalars(
+            select(WasherPaySettlement).where(
+                WasherPaySettlement.branch_office_id == branch_office_id,
+                WasherPaySettlement.pay_date == day,
+                WasherPaySettlement.washer_id.in_(washer_ids),
+            ),
+        ).all()
+        return {
+            washer_id: False
+            for washer_id in washer_ids
+        } | {
+            row.washer_id: bool(row.manual_goal_met)
+            for row in rows
+            if row.manual_goal_met
+        }
+
+    def _get_manual_goal_met(
+        self,
+        *,
+        branch_office_id: int,
+        day: date,
+        washer_id: int,
+    ) -> bool:
+        row = self.db.scalars(
+            select(WasherPaySettlement).where(
+                WasherPaySettlement.branch_office_id == branch_office_id,
+                WasherPaySettlement.pay_date == day,
+                WasherPaySettlement.washer_id == washer_id,
+            ).limit(1),
+        ).first()
+        return bool(row and row.manual_goal_met)
+
+    def _upsert_settlement_row(
+        self,
+        *,
+        branch_office_id: int,
+        day: date,
+        washer_id: int,
+    ) -> WasherPaySettlement:
+        row = self.db.scalars(
+            select(WasherPaySettlement).where(
+                WasherPaySettlement.branch_office_id == branch_office_id,
+                WasherPaySettlement.pay_date == day,
+                WasherPaySettlement.washer_id == washer_id,
+            ).limit(1),
+        ).first()
+        if row is not None:
+            return row
+        now = business_now()
+        row = WasherPaySettlement(
+            branch_office_id=branch_office_id,
+            washer_id=washer_id,
+            pay_date=day,
+            is_paid=False,
+            manual_goal_met=False,
+            added_date=now,
+            updated_date=now,
+        )
+        self.db.add(row)
+        return row
+
+    def set_manual_goal_met(
+        self,
+        user: UserPublic,
+        *,
+        branch_office_id: int,
+        date_value: str,
+        washer_id: int,
+        manual_goal_met: bool,
+    ) -> WasherPayManualGoalMetResponse:
+        self._ensure_branch_access(user, branch_office_id)
+        day = self._parse_date(date_value)
+        if washer_id not in self._branch_washer.list_washer_ids_for_branch(branch_office_id):
+            raise WasherPayValidationError("El lavador no pertenece a esta sucursal")
+
+        now = business_now()
+        row = self._upsert_settlement_row(
+            branch_office_id=branch_office_id,
+            day=day,
+            washer_id=washer_id,
+        )
+        row.manual_goal_met = manual_goal_met
+        row.updated_date = now
+        self.db.commit()
+
+        return WasherPayManualGoalMetResponse(
+            washer_id=str(washer_id),
+            branch_office_id=str(branch_office_id),
+            date=day.isoformat(),
+            manual_goal_met=manual_goal_met,
+        )
+
     def set_payment_status(
         self,
         user: UserPublic,
@@ -280,27 +383,13 @@ class WasherPayService:
 
         is_paid = payment_status == "paid"
         now = business_now()
-        row = self.db.scalars(
-            select(WasherPaySettlement).where(
-                WasherPaySettlement.branch_office_id == branch_office_id,
-                WasherPaySettlement.pay_date == day,
-                WasherPaySettlement.washer_id == washer_id,
-            ).limit(1),
-        ).first()
-        if row is None:
-            self.db.add(
-                WasherPaySettlement(
-                    branch_office_id=branch_office_id,
-                    washer_id=washer_id,
-                    pay_date=day,
-                    is_paid=is_paid,
-                    added_date=now,
-                    updated_date=now,
-                ),
-            )
-        else:
-            row.is_paid = is_paid
-            row.updated_date = now
+        row = self._upsert_settlement_row(
+            branch_office_id=branch_office_id,
+            day=day,
+            washer_id=washer_id,
+        )
+        row.is_paid = is_paid
+        row.updated_date = now
         self.db.commit()
 
         return WasherPayStatusResponse(
@@ -663,11 +752,10 @@ class WasherPayService:
             self._waterfall_pay_steps(gross_total, card_gross, effective_pct)
         )
         pct_label = self._format_percentage_display(effective_pct)
-        commission_label = (
-            f"Comisión ({pct_label} promedio del grupo)"
-            if is_group
-            else f"Comisión ({pct_label})"
-        )
+        if is_group:
+            commission_label = f"Comisión ({pct_label} promedio del grupo)"
+        else:
+            commission_label = f"Comisión ({pct_label})"
         first_label = "Total del Grupo" if is_group else "Total cobrado (bruto)"
         final_label = "Total a pagar por el grupo" if is_group else "Total a pagar"
         rows: list[WasherPayBreakdownRow] = [
@@ -1036,6 +1124,7 @@ class WasherPayService:
         branch_office_id: int,
         washer_id: int,
         day: date,
+        force_goal_met: bool = False,
     ) -> tuple[int, int, list[WasherPayDetailLine], int]:
         assignment = self._branch_washer.get_active_assignment_for_washer(washer_id)
         if assignment is None:
@@ -1053,7 +1142,7 @@ class WasherPayService:
         solo_goal_met = self._is_goal_met(
             sales_volume=solo_sales_gross,
             goal_amount=self._member_goal_amount(assignment),
-        )
+        ) or force_goal_met
         boost_pct = self._goal_percentage_boost(
             assignment,
             day=day,
@@ -1212,12 +1301,19 @@ class WasherPayService:
             day=day,
             washer_ids=washer_ids,
         )
+        manual_goal_met_map = self._manual_goal_met_map(
+            branch_office_id=branch_office_id,
+            day=day,
+            washer_ids=washer_ids,
+        )
         washer_by_id: dict[int, dict[str, object]] = {}
         for washer_id in washer_ids:
+            manual_goal_met = manual_goal_met_map.get(washer_id, False)
             amount, ticket_count, _, solo_sales_gross = self._compute_washer_pay(
                 branch_office_id=branch_office_id,
                 washer_id=washer_id,
                 day=day,
+                force_goal_met=manual_goal_met,
             )
             if ticket_count <= 0 and amount <= 0:
                 continue
@@ -1226,12 +1322,13 @@ class WasherPayService:
                 sales_volume=solo_sales_gross,
                 goal_amount=self._member_goal_amount(assignment),
             )
+            effective_goal_met = solo_goal_met or manual_goal_met
             applied_pct = (
                 self._format_percentage_display(
                     self._effective_percentage(
                         assignment,
                         day=day,
-                        goal_met=solo_goal_met,
+                        goal_met=effective_goal_met,
                     ),
                 )
                 if assignment is not None
@@ -1370,10 +1467,21 @@ class WasherPayService:
             raise WasherPayValidationError("El lavador no pertenece a esta sucursal")
 
         assignment = self._branch_washer.get_active_assignment_for_washer(washer_id)
+        is_solo_detail = group_id is None or group_id <= 0
+        manual_goal_met = (
+            self._get_manual_goal_met(
+                branch_office_id=branch_office_id,
+                day=day,
+                washer_id=washer_id,
+            )
+            if is_solo_detail
+            else False
+        )
         amount, _, detail_lines, solo_sales_gross = self._compute_washer_pay(
             branch_office_id=branch_office_id,
             washer_id=washer_id,
             day=day,
+            force_goal_met=manual_goal_met,
         )
         ticket_lines = [line for line in detail_lines if line.kind == "ticket"]
         member_ids: list[int] = []
@@ -1413,9 +1521,15 @@ class WasherPayService:
             sales_volume=solo_sales_gross,
             goal_amount=self._member_goal_amount(assignment),
         )
-        goal_met = group_goal_met if group_id is not None and group_id > 0 else self._is_goal_met(
-            sales_volume=daily_sales_volume,
-            goal_amount=goal_amount,
+        effective_solo_goal_met = solo_goal_met or manual_goal_met
+        goal_met = (
+            group_goal_met
+            if group_id is not None and group_id > 0
+            else self._is_goal_met(
+                sales_volume=daily_sales_volume,
+                goal_amount=goal_amount,
+            )
+            or manual_goal_met
         )
 
         is_sunday = day.weekday() == 6
@@ -1423,7 +1537,7 @@ class WasherPayService:
         boost_pct = self._goal_percentage_boost(
             assignment,
             day=day,
-            goal_met=solo_goal_met,
+            goal_met=effective_solo_goal_met,
         )
         effective_pct = base_pct + boost_pct
         base_commission = 0
@@ -1597,4 +1711,5 @@ class WasherPayService:
                 washer_id=washer_id,
             ),
             pay_breakdown=pay_breakdown,
+            manual_goal_met=manual_goal_met,
         )
