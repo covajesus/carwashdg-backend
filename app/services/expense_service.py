@@ -1,6 +1,7 @@
+import calendar
 from datetime import date, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.branch_scope import branch_scope_for_user
@@ -160,6 +161,31 @@ class ExpenseService:
             return
         if scope == 0 or row.branch_office_id != scope:
             raise ExpenseNotFoundError()
+
+    def month_total_for_user(self, user: UserPublic, *, year: int, month: int) -> int:
+        if month < 1 or month > 12:
+            raise ExpenseValidationError("Mes no válido")
+        if year < 2000 or year > 2100:
+            raise ExpenseValidationError("Año no válido")
+
+        scope = branch_scope_for_user(user)
+        if scope == 0:
+            return 0
+
+        first_day = date(year, month, 1)
+        last_day = date(year, month, calendar.monthrange(year, month)[1])
+
+        stmt = select(func.coalesce(func.sum(Expense.amount), 0)).where(
+            Expense.deleted_date.is_(None),
+            Expense.expense_date >= first_day,
+            Expense.expense_date <= last_day,
+        )
+        if scope is not None:
+            stmt = stmt.where(Expense.branch_office_id == scope)
+        if not self._user_is_admin(user):
+            stmt = stmt.where(Expense.expense_type.notin_(tuple(ADMIN_ONLY_EXPENSE_TYPES)))
+
+        return int(self.db.scalar(stmt) or 0)
 
     def list_for_user(
         self,

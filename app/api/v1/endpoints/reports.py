@@ -1,11 +1,36 @@
 from fastapi import APIRouter, HTTPException
 
-from app.api.deps import CurrentUserDep, EerrServiceDep
+from app.api.deps import CurrentUserDep, DashboardServiceDep, EerrServiceDep
+from app.schemas.dashboard import DashboardHomeSummaryResponse
 from app.schemas.eerr import EerrMonthResponse
 from app.schemas.ticket import ErrorResponse
+from app.services.dashboard_service import DashboardForbiddenError, DashboardValidationError
 from app.services.eerr_service import EerrForbiddenError, EerrValidationError
 
 router = APIRouter(prefix="/reports", tags=["reports"])
+
+
+@router.get(
+    "/dashboard-home",
+    response_model=DashboardHomeSummaryResponse,
+    responses={400: {"model": ErrorResponse}, 403: {"model": ErrorResponse}},
+)
+def get_dashboard_home_summary(
+    year: int,
+    month: int,
+    current_user: CurrentUserDep,
+    service: DashboardServiceDep,
+) -> DashboardHomeSummaryResponse:
+    try:
+        return service.build_home_summary(
+            current_user,
+            year=year,
+            month=month,
+        )
+    except DashboardForbiddenError as exc:
+        raise HTTPException(status_code=403, detail="Not authorized") from exc
+    except DashboardValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get(
