@@ -161,7 +161,13 @@ class ExpenseService:
         if scope == 0 or row.branch_office_id != scope:
             raise ExpenseNotFoundError()
 
-    def list_for_user(self, user: UserPublic) -> list[ExpensePublic]:
+    def list_for_user(
+        self,
+        user: UserPublic,
+        *,
+        branch_office_id: int | None = None,
+        expense_date: date | None = None,
+    ) -> list[ExpensePublic]:
         scope = branch_scope_for_user(user)
         if scope == 0:
             return []
@@ -172,6 +178,12 @@ class ExpenseService:
         )
         if scope is not None:
             stmt = stmt.where(Expense.branch_office_id == scope)
+        elif branch_office_id is not None and branch_office_id >= 1:
+            self._validate_branch_exists(branch_office_id)
+            stmt = stmt.where(Expense.branch_office_id == branch_office_id)
+
+        if expense_date is not None:
+            stmt = stmt.where(Expense.expense_date == expense_date)
 
         rows = list(self.db.scalars(stmt).all())
         if not self._user_is_admin(user):

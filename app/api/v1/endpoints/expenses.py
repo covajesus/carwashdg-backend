@@ -1,4 +1,6 @@
-from fastapi import APIRouter, HTTPException, status
+from datetime import date
+
+from fastapi import APIRouter, HTTPException, Query, status
 
 from app.api.deps import CurrentUserDep, ExpenseServiceDep
 from app.schemas.expense import (
@@ -36,8 +38,19 @@ def list_expense_types(
 def list_expenses(
     current_user: CurrentUserDep,
     service: ExpenseServiceDep,
+    branch_office_id: int | None = Query(default=None, ge=1),
+    expense_date: date | None = Query(default=None, alias="date"),
 ) -> ExpenseListResponse:
-    return ExpenseListResponse(items=service.list_for_user(current_user))
+    try:
+        return ExpenseListResponse(
+            items=service.list_for_user(
+                current_user,
+                branch_office_id=branch_office_id,
+                expense_date=expense_date,
+            ),
+        )
+    except ExpenseValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("", response_model=ExpenseItemResponse, status_code=status.HTTP_201_CREATED)
