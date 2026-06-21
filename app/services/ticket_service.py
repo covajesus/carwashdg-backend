@@ -1,7 +1,7 @@
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, time
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.datetime_utils import business_local_date, business_now, business_today, datetime_to_iso
@@ -256,6 +256,53 @@ class TicketService:
         if branch_scope == 0:
             return stmt.where(Ticket.id < 0)
         return stmt.where(Ticket.id.in_(self._ticket_ids_for_branch_subquery(branch_scope)))
+
+    def _branch_collected_tickets(
+        self,
+        branch_office_id: int,
+        *,
+        revenue_day: date | None = None,
+    ) -> list[Ticket]:
+        stmt = self._active_filter(select(Ticket)).where(
+            Ticket.id.in_(self._ticket_ids_for_branch_subquery(branch_office_id)),
+            or_(
+                Ticket.payment_type_id.in_(tuple(PAID_PAYMENT_TYPE_IDS)),
+                Ticket.status_id == TICKET_STATUS_PAID_ID,
+            ),
+        )
+        if revenue_day is not None:
+            day_start = datetime.combine(revenue_day, time.min)
+            day_end = datetime.combine(revenue_day, time(23, 59, 59, 999999))
+            stmt = stmt.where(
+                Ticket.updated_date.isnot(None),
+                Ticket.updated_date >= day_start,
+                Ticket.updated_date <= day_end,
+            )
+
+        rows = list(self.db.scalars(stmt).all())
+        collected = [row for row in rows if self.ticket_is_collected(row)]
+        if revenue_day is None:
+            return collected
+        return [
+            row
+            for row in collected
+            if self.ticket_revenue_day(row) == revenue_day
+        ]
+
+    @staticmethod
+    def _accumulate_ticket_into_earnings_bucket(
+        bucket: dict[str, int],
+        *,
+        pricing: dict[str, int],
+        cash: int,
+        transbank: int,
+    ) -> None:
+        bucket["ticket_count"] += 1
+        bucket["subtotal"] += pricing["subtotal"]
+        bucket["iva"] += pricing["iva"]
+        bucket["total"] += pricing["total"]
+        bucket["cash_total"] += cash
+        bucket["transbank_gross"] += transbank
 
     def _ticket_matches_branch(self, ticket_id: int, branch_office_id: int) -> bool:
         if self._branch_id_for_ticket(ticket_id) == str(branch_office_id):
@@ -548,32 +595,24 @@ class TicketService:
 
         buckets: dict[str, dict[str, int]] = defaultdict(empty_earnings_bucket)
 
-        stmt = self._list_stmt_for_user(user)
-        for row in self.db.scalars(stmt).all():
-            if row.id is None:
-                continue
-            resolved_branch = self._resolve_branch_office_id_for_ticket(row.id)
-            bucket_key = resolved_branch if resolved_branch is not None else 0
-            if bucket_key != branch_office_id:
-                continue
-            if not self.ticket_is_collected(row):
-                continue
-
+        for row in self._branch_collected_tickets(
+            branch_office_id,
+            revenue_day=revenue_day,
+        ):
             ticket_revenue_day = self.ticket_revenue_day(row)
-            if revenue_day is not None and ticket_revenue_day != revenue_day:
-                continue
             day_key = (
                 ticket_revenue_day.isoformat()
                 if ticket_revenue_day is not None
                 else "sin-fecha"
             )
-
             pricing = self._ticket_pricing(row.id, row)
-            bucket = buckets[day_key]
-            bucket["ticket_count"] += 1
-            bucket["subtotal"] += pricing["subtotal"]
-            bucket["iva"] += pricing["iva"]
-            bucket["total"] += pricing["total"]
+            cash, transbank = self._payment_split_amounts(row)
+            self._accumulate_ticket_into_earnings_bucket(
+                buckets[day_key],
+                pricing=pricing,
+                cash=cash,
+                transbank=transbank,
+            )
 
         return dict(buckets)
 
@@ -703,6 +742,8 @@ class TicketService:
                     subtotal=totals["subtotal"],
                     iva=totals["iva"],
                     total=totals["total"],
+                    cash_total=totals.get("cash_total", 0),
+                    transbank_gross=totals.get("transbank_gross", 0),
                 ),
             )
 
@@ -716,6 +757,8 @@ class TicketService:
             iva=sum(row.iva for row in date_items),
             total=sum(row.total for row in date_items),
             ticket_count=sum(row.ticket_count for row in date_items),
+            cash_total=sum(row.cash_total for row in date_items),
+            transbank_gross=sum(row.transbank_gross for row in date_items),
         )
 
     def get_detail(self, ticket_id: int, user: UserPublic) -> TicketDetailResponse:

@@ -29,7 +29,14 @@ class CollectionForbiddenError(Exception):
 
 
 def empty_earnings_bucket() -> dict[str, int]:
-    return {"ticket_count": 0, "subtotal": 0, "iva": 0, "total": 0}
+    return {
+        "ticket_count": 0,
+        "subtotal": 0,
+        "iva": 0,
+        "total": 0,
+        "cash_total": 0,
+        "transbank_gross": 0,
+    }
 
 
 def apply_manual_gross_to_bucket(bucket: dict[str, int], gross_amount: int) -> None:

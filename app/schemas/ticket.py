@@ -162,6 +162,8 @@ class BranchEarningsByDateItem(BaseModel):
     subtotal: int = Field(ge=0)
     iva: int = Field(ge=0)
     total: int = Field(ge=0)
+    cash_total: int = Field(ge=0, default=0)
+    transbank_gross: int = Field(ge=0, default=0)
 
 
 class TicketEarningsByBranchDateResponse(BaseModel):
@@ -172,6 +174,8 @@ class TicketEarningsByBranchDateResponse(BaseModel):
     iva: int = Field(ge=0)
     total: int = Field(ge=0)
     ticket_count: int = Field(ge=0)
+    cash_total: int = Field(ge=0, default=0)
+    transbank_gross: int = Field(ge=0, default=0)
 
 
 class TicketDetailResponse(BaseModel):
