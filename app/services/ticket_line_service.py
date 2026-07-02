@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.datetime_utils import business_now, datetime_to_iso
@@ -133,6 +133,26 @@ class TicketLineService:
 
     def washer_id_for_ticket(self, ticket_id: int) -> int | None:
         return self._default_washer_for_ticket(ticket_id)
+
+    def gross_totals_for_ticket_ids(self, ticket_ids: list[int]) -> dict[int, int]:
+        if not ticket_ids:
+            return {}
+        rows = self.db.execute(
+            select(
+                TicketBranchOfficeService.ticket_id,
+                func.coalesce(func.sum(TicketBranchOfficeService.total), 0),
+            )
+            .where(
+                TicketBranchOfficeService.ticket_id.in_(ticket_ids),
+                TicketBranchOfficeService.deleted_date.is_(None),
+            )
+            .group_by(TicketBranchOfficeService.ticket_id),
+        ).all()
+        return {
+            int(ticket_id): int(total or 0)
+            for ticket_id, total in rows
+            if ticket_id is not None
+        }
 
     def assignee_labels_for_ticket_ids(
         self,

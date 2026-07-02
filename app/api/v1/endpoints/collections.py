@@ -1,9 +1,10 @@
 from datetime import date
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from app.api.deps import CollectionServiceDep, CurrentUserDep, TicketServiceDep
 from app.schemas.collection import (
+    CollectionBranchesSummaryResponse,
     CollectionCalendarResponse,
     CollectionDayResponse,
     CollectionUpsert,
@@ -20,6 +21,31 @@ def _parse_date(value: str) -> date:
         return date.fromisoformat(value.strip())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid date") from exc
+
+
+@router.get(
+    "/branches-summary",
+    response_model=CollectionBranchesSummaryResponse,
+    responses={400: {"model": ErrorResponse}, 403: {"model": ErrorResponse}},
+)
+def get_collection_branches_summary(
+    current_user: CurrentUserDep,
+    ticket_service: TicketServiceDep,
+    collection_service: CollectionServiceDep,
+    date_from: date = Query(alias="from"),
+    date_to: date = Query(alias="to"),
+) -> CollectionBranchesSummaryResponse:
+    try:
+        return collection_service.build_branches_summary(
+            current_user,
+            ticket_service,
+            date_from=date_from,
+            date_to=date_to,
+        )
+    except CollectionValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except CollectionForbiddenError as exc:
+        raise HTTPException(status_code=403, detail="Not authorized") from exc
 
 
 @router.get(

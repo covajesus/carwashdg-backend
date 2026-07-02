@@ -1,6 +1,6 @@
 import calendar
 from copy import deepcopy
-from datetime import date
+from datetime import date, timedelta
 
 from sqlalchemy import select, text
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
@@ -12,6 +12,8 @@ from app.core.pricing import ticket_totals_from_subtotal
 from app.models.branch_collection import BranchCollection
 from app.models.branch_office import BranchOffice
 from app.schemas.collection import (
+    CollectionBranchSummaryItem,
+    CollectionBranchesSummaryResponse,
     CollectionCalendarDay,
     CollectionCalendarResponse,
     CollectionDayResponse,
@@ -385,4 +387,90 @@ class CollectionService:
             year=year,
             month=month,
             days=days,
+        )
+
+    def build_branches_summary(
+        self,
+        user: UserPublic,
+        ticket_service,
+        *,
+        date_from: date,
+        date_to: date,
+    ) -> CollectionBranchesSummaryResponse:
+        if date_to < date_from:
+            raise CollectionValidationError("La fecha final no puede ser anterior a la inicial")
+
+        scope = branch_scope_for_user(user)
+        if scope == 0:
+            return CollectionBranchesSummaryResponse(
+                date_from=date_from,
+                date_to=date_to,
+                items=[],
+                subtotal=0,
+                iva=0,
+                total=0,
+                ticket_count=0,
+            )
+
+        if scope is not None:
+            branch_rows = [self.db.get(BranchOffice, scope)]
+            if branch_rows[0] is None or not branch_rows[0].is_active:
+                raise CollectionValidationError("La sucursal no existe")
+        else:
+            branch_rows = list(
+                self.db.scalars(
+                    select(BranchOffice)
+                    .where(BranchOffice.deleted_date.is_(None))
+                    .order_by(BranchOffice.branch_office.asc()),
+                ).all(),
+            )
+
+        items: list[CollectionBranchSummaryItem] = []
+        for branch in branch_rows:
+            if branch.id is None:
+                continue
+            branch_id = int(branch.id)
+            try:
+                buckets = ticket_service.ticket_earnings_date_buckets(user, branch_id)
+            except Exception:
+                continue
+            manual_by_day = self._manual_gross_by_day_key(branch_id)
+
+            subtotal = 0
+            iva = 0
+            total = 0
+            ticket_count = 0
+            current = date_from
+            while current <= date_to:
+                day_key = current.isoformat()
+                tickets = self.tickets_bucket_for_date(buckets, current)
+                manual = manual_by_day.get(day_key, 0)
+                combined = deepcopy(tickets)
+                apply_manual_gross_to_bucket(combined, manual)
+                subtotal += combined["subtotal"]
+                iva += combined["iva"]
+                total += combined["total"]
+                ticket_count += combined["ticket_count"]
+                current += timedelta(days=1)
+
+            items.append(
+                CollectionBranchSummaryItem(
+                    branch_office_id=str(branch_id),
+                    branch_name=branch.branch_office.strip() or f"Sucursal #{branch_id}",
+                    ticket_count=ticket_count,
+                    subtotal=subtotal,
+                    iva=iva,
+                    total=total,
+                    has_collection=ticket_count > 0 or total > 0,
+                ),
+            )
+
+        return CollectionBranchesSummaryResponse(
+            date_from=date_from,
+            date_to=date_to,
+            items=items,
+            subtotal=sum(row.subtotal for row in items),
+            iva=sum(row.iva for row in items),
+            total=sum(row.total for row in items),
+            ticket_count=sum(row.ticket_count for row in items),
         )

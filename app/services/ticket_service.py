@@ -1,7 +1,7 @@
 from collections import defaultdict
 from datetime import date, datetime, time
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.datetime_utils import business_local_date, business_now, business_today, datetime_to_iso
@@ -475,13 +475,190 @@ class TicketService:
             return data.needs_tax_receipt
         return False
 
+    def _apply_revenue_day_filter(self, stmt, revenue_day: date):
+        day_start = datetime.combine(revenue_day, time.min)
+        day_end = datetime.combine(revenue_day, time(23, 59, 59, 999999))
+        collected = or_(
+            Ticket.payment_type_id.in_(tuple(PAID_PAYMENT_TYPE_IDS)),
+            Ticket.status_id == TICKET_STATUS_PAID_ID,
+        )
+        return stmt.where(
+            or_(
+                and_(
+                    collected,
+                    Ticket.updated_date.isnot(None),
+                    Ticket.updated_date >= day_start,
+                    Ticket.updated_date <= day_end,
+                ),
+                and_(
+                    ~collected,
+                    Ticket.added_date >= day_start,
+                    Ticket.added_date <= day_end,
+                ),
+            ),
+        )
+
+    def _branch_ids_for_ticket_ids(self, ticket_ids: list[int]) -> dict[int, int]:
+        if not ticket_ids:
+            return {}
+
+        from app.models.branch_office_washer import BranchOfficeWasher
+        from app.models.ticket_branch_office_service import TicketBranchOfficeService
+        from app.models.washer_daily_group import WasherDailyGroup
+
+        result: dict[int, int] = {}
+        washer_rows = self.db.execute(
+            select(
+                TicketBranchOfficeService.ticket_id,
+                BranchOfficeWasher.branch_office_id,
+            )
+            .join(
+                BranchOfficeWasher,
+                TicketBranchOfficeService.washer_id == BranchOfficeWasher.washer_id,
+            )
+            .where(
+                TicketBranchOfficeService.ticket_id.in_(ticket_ids),
+                TicketBranchOfficeService.deleted_date.is_(None),
+                TicketBranchOfficeService.washer_id.isnot(None),
+                BranchOfficeWasher.deleted_date.is_(None),
+                BranchOfficeWasher.branch_office_id.isnot(None),
+            )
+            .distinct(),
+        ).all()
+        for ticket_id, branch_id in washer_rows:
+            if ticket_id is None or branch_id is None:
+                continue
+            tid = int(ticket_id)
+            if tid not in result:
+                result[tid] = int(branch_id)
+
+        missing = [ticket_id for ticket_id in ticket_ids if ticket_id not in result]
+        if not missing:
+            return result
+
+        group_rows = self.db.execute(
+            select(
+                TicketBranchOfficeService.ticket_id,
+                WasherDailyGroup.branch_office_id,
+            )
+            .join(
+                WasherDailyGroup,
+                TicketBranchOfficeService.washer_daily_group_id == WasherDailyGroup.id,
+            )
+            .where(
+                TicketBranchOfficeService.ticket_id.in_(missing),
+                TicketBranchOfficeService.deleted_date.is_(None),
+                WasherDailyGroup.deleted_date.is_(None),
+            )
+            .distinct(),
+        ).all()
+        for ticket_id, branch_id in group_rows:
+            if ticket_id is None or branch_id is None:
+                continue
+            tid = int(ticket_id)
+            if tid not in result:
+                result[tid] = int(branch_id)
+        return result
+
+    def _customer_names_for_tickets(self, rows: list[Ticket]) -> dict[int, str]:
+        customer_ids = {
+            int(row.customer_id)
+            for row in rows
+            if row.id is not None and row.customer_id is not None
+        }
+        plate_ids = {
+            row.license_plate_id.strip()
+            for row in rows
+            if row.id is not None
+            and not row.customer_id
+            and row.license_plate_id
+            and row.license_plate_id.strip()
+        }
+
+        by_customer_id: dict[int, str] = {}
+        if customer_ids:
+            for customer in self.db.scalars(
+                select(Customer).where(
+                    Customer.id.in_(customer_ids),
+                    Customer.deleted_date.is_(None),
+                ),
+            ).all():
+                if customer.id is not None:
+                    by_customer_id[int(customer.id)] = customer.full_name
+
+        by_plate: dict[str, str] = {}
+        if plate_ids:
+            for customer in self.db.scalars(
+                select(Customer).where(
+                    Customer.license_plate_id.in_(plate_ids),
+                    Customer.deleted_date.is_(None),
+                ),
+            ).all():
+                plate = (customer.license_plate_id or "").strip()
+                if plate:
+                    by_plate[plate] = customer.full_name
+
+        names: dict[int, str] = {}
+        for row in rows:
+            if row.id is None:
+                continue
+            tid = int(row.id)
+            if row.customer_id is not None:
+                name = by_customer_id.get(int(row.customer_id))
+                if name:
+                    names[tid] = name
+                    continue
+            if row.license_plate_id:
+                plate = row.license_plate_id.strip()
+                names[tid] = by_plate.get(plate, plate)
+                continue
+            names[tid] = "—"
+        return names
+
+    def _pricing_for_list_rows(self, rows: list[Ticket]) -> dict[int, dict[str, int]]:
+        pricing_by_ticket: dict[int, dict[str, int]] = {}
+        need_line_totals: list[int] = []
+        for row in rows:
+            if row.id is None:
+                continue
+            tid = int(row.id)
+            stored = self._stored_pricing(row)
+            if stored is not None:
+                pricing_by_ticket[tid] = stored
+                continue
+            need_line_totals.append(tid)
+
+        if not need_line_totals:
+            return pricing_by_ticket
+
+        line_gross = self._lines.gross_totals_for_ticket_ids(need_line_totals)
+        for row in rows:
+            if row.id is None:
+                continue
+            tid = int(row.id)
+            if tid in pricing_by_ticket:
+                continue
+            gross = line_gross.get(tid, 0)
+            if row.payment_type_id == PAYMENT_TYPE_MIXED:
+                efectivo, transbank = self._payment_split_amounts(row)
+                if efectivo > 0 and transbank > 0:
+                    pricing_by_ticket[tid] = split_mixed_payment_totals(efectivo, transbank)
+                    continue
+            apply_iva = self._infer_apply_iva_from_row(row)
+            pricing_by_ticket[tid] = ticket_totals_from_subtotal(gross, apply_iva=apply_iva)
+        return pricing_by_ticket
+
     def _to_list_item(
         self,
         row: Ticket,
         *,
         assignee: tuple[str, str, int | None, int | None] | None = None,
+        branch_id: str | None = None,
+        customer_name: str | None = None,
+        pricing: dict[str, int] | None = None,
     ) -> TicketListItem:
-        pricing = self._ticket_pricing(row.id, row)
+        ticket_id = int(row.id) if row.id is not None else 0
+        resolved_pricing = pricing if pricing is not None else self._ticket_pricing(ticket_id, row)
         created = datetime_to_iso(row.added_date) or ""
         assignee_kind: str | None = None
         assignee_label: str | None = None
@@ -495,16 +672,18 @@ class TicketService:
                 assignee_group_id = str(group_id)
         revenue_day = self.ticket_revenue_day(row)
         efectivo_amount, transbank_amount = self._payment_split_amounts(row)
+        resolved_branch_id = branch_id if branch_id is not None else self._branch_id_for_ticket(ticket_id)
+        resolved_customer_name = customer_name if customer_name is not None else self._customer_name(row)
         return TicketListItem(
             id=str(row.id),
             folio=f"T-{row.id}",
-            branchId=self._branch_id_for_ticket(row.id),
+            branchId=resolved_branch_id,
             vehicleTypeId=str(row.car_type_id or ""),
             licensePlate=row.license_plate_id or "",
-            total=pricing["total"],
+            total=resolved_pricing["total"],
             status=self._list_status_for_ticket(row),
             createdAt=created,
-            customer_name=self._customer_name(row),
+            customer_name=resolved_customer_name,
             paymentTypeId=(
                 str(row.payment_type_id) if row.payment_type_id else None
             ),
@@ -532,24 +711,34 @@ class TicketService:
         *,
         revenue_day: date | None = None,
     ) -> list[TicketListItem]:
-        stmt = self._list_stmt_for_user(user)
-        rows = self.db.scalars(stmt).all()
-        ticket_ids = [int(row.id) for row in rows if row.id is not None]
-        assignees = self._lines.assignee_labels_for_ticket_ids(ticket_ids)
-        items = [
-            self._to_list_item(row, assignee=assignees.get(int(row.id)) if row.id else None)
-            for row in rows
-        ]
-
         scope = self._branch_scope_for_user(user)
-        if scope is not None:
-            effective = business_today()
-            return [i for i in items if self._list_item_matches_revenue_day(i, effective)]
+        effective_day = business_today() if scope is not None else revenue_day
 
-        if revenue_day is not None:
-            return [i for i in items if self._list_item_matches_revenue_day(i, revenue_day)]
+        stmt = self._list_stmt_for_user(user)
+        if effective_day is not None:
+            stmt = self._apply_revenue_day_filter(stmt, effective_day)
 
-        return items
+        rows = list(self.db.scalars(stmt).all())
+        ticket_ids = [int(row.id) for row in rows if row.id is not None]
+        if not ticket_ids:
+            return []
+
+        assignees = self._lines.assignee_labels_for_ticket_ids(ticket_ids)
+        branch_ids = self._branch_ids_for_ticket_ids(ticket_ids)
+        customer_names = self._customer_names_for_tickets(rows)
+        pricing_by_ticket = self._pricing_for_list_rows(rows)
+
+        return [
+            self._to_list_item(
+                row,
+                assignee=assignees.get(int(row.id)) if row.id is not None else None,
+                branch_id=str(branch_ids.get(int(row.id), "")) if row.id is not None else "",
+                customer_name=customer_names.get(int(row.id), "—") if row.id is not None else "—",
+                pricing=pricing_by_ticket.get(int(row.id)) if row.id is not None else None,
+            )
+            for row in rows
+            if row.id is not None
+        ]
 
     def summary_for_user(self, user: UserPublic) -> TicketSummaryResponse:
         stmt = self._list_stmt_for_user(user)

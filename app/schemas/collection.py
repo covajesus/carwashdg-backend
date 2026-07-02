@@ -41,3 +41,23 @@ class CollectionCalendarResponse(BaseModel):
     year: int
     month: int
     days: list[CollectionCalendarDay]
+
+
+class CollectionBranchSummaryItem(BaseModel):
+    branch_office_id: str
+    branch_name: str
+    ticket_count: int = Field(ge=0)
+    subtotal: int = Field(ge=0)
+    iva: int = Field(ge=0)
+    total: int = Field(ge=0)
+    has_collection: bool = False
+
+
+class CollectionBranchesSummaryResponse(BaseModel):
+    date_from: date
+    date_to: date
+    items: list[CollectionBranchSummaryItem]
+    subtotal: int = Field(ge=0)
+    iva: int = Field(ge=0)
+    total: int = Field(ge=0)
+    ticket_count: int = Field(ge=0)
