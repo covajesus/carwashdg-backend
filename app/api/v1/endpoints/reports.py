@@ -43,12 +43,14 @@ def get_eerr_month(
     month: int,
     current_user: CurrentUserDep,
     service: EerrServiceDep,
+    branch_office_id: int | None = None,
 ) -> EerrMonthResponse:
     try:
         return service.build_month(
             current_user,
             year=year,
             month=month,
+            branch_office_id=branch_office_id,
         )
     except EerrForbiddenError as exc:
         raise HTTPException(status_code=403, detail="Not authorized") from exc

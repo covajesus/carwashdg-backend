@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import calendar
 from collections import defaultdict
+from copy import deepcopy
 from datetime import date
 
 from sqlalchemy import select
@@ -9,12 +10,14 @@ from sqlalchemy.orm import Session
 
 from app.core.branch_scope import branch_scope_for_user
 from app.core.datetime_utils import business_today
-from app.core.pricing import ticket_totals_from_subtotal
 from app.models.branch_office import BranchOffice
 from app.schemas.eerr import EerrAccountLine, EerrDetailItem, EerrMonthResponse
-from app.services.collection_service import empty_earnings_bucket
 from app.schemas.user import UserPublic
-from app.services.collection_service import CollectionService
+from app.services.collection_service import (
+    CollectionService,
+    apply_manual_gross_to_bucket,
+    empty_earnings_bucket,
+)
 from app.services.expense_service import ADMIN_ONLY_EXPENSE_TYPES, EXPENSE_TYPE_LABELS, ExpenseService
 from app.services.ticket_service import TicketService, TicketValidationError
 from app.services.washer_pay_service import WasherPayService, WasherPayValidationError
@@ -62,14 +65,6 @@ def _expense_date_key(expense_date, added_date) -> str | None:
     return None
 
 
-def _net_and_vat_from_gross(gross: int) -> tuple[int, int]:
-    """Neto e IVA (19%) a partir del total bruto con IVA incluido."""
-    if gross <= 0:
-        return 0, 0
-    breakdown = ticket_totals_from_subtotal(gross, apply_iva=True)
-    return int(breakdown["subtotal"]), int(breakdown["iva"])
-
-
 class EerrService:
     def __init__(self, db: Session) -> None:
         self.db = db
@@ -86,23 +81,46 @@ class EerrService:
     def _revenue_buckets_by_branch(
         self,
         user: UserPublic,
+        *,
+        year: int,
+        month: int,
+        branch_office_id: int | None = None,
     ) -> dict[int, dict[str, dict[str, int]]]:
-        branches = self.db.scalars(select(BranchOffice).order_by(BranchOffice.id)).all()
+        """Misma lógica que el reporte de recaudación: tickets + manual por día."""
+        stmt = (
+            select(BranchOffice)
+            .where(BranchOffice.deleted_date.is_(None))
+            .order_by(BranchOffice.id)
+        )
+        if branch_office_id is not None and branch_office_id >= 1:
+            stmt = stmt.where(BranchOffice.id == branch_office_id)
+        branches = self.db.scalars(stmt).all()
+        last_day = calendar.monthrange(year, month)[1]
         by_branch: dict[int, dict[str, dict[str, int]]] = {}
 
         for branch in branches:
+            if branch.id is None:
+                continue
             branch_id = int(branch.id)
-            mgmt = int(branch.management_type_id or 1)
             try:
-                if mgmt == 1:
-                    branch_buckets = self._tickets.ticket_earnings_date_buckets(user, branch_id)
-                elif mgmt == 2:
-                    branch_buckets: dict[str, dict[str, int]] = {}
-                    self._collections.merge_into_date_buckets(branch_buckets, branch_id)
-                else:
-                    branch_buckets = {}
+                ticket_buckets = self._tickets.ticket_earnings_date_buckets(user, branch_id)
             except TicketValidationError as exc:
                 raise EerrValidationError(str(exc)) from exc
+
+            manual_by_day = self._collections._manual_gross_by_day_key(branch_id)
+            branch_buckets: dict[str, dict[str, int]] = {}
+
+            for day_num in range(1, last_day + 1):
+                day = date(year, month, day_num)
+                day_key = day.isoformat()
+                tickets = self._collections.tickets_bucket_for_date(ticket_buckets, day)
+                manual = manual_by_day.get(day_key, 0)
+                combined = deepcopy(tickets)
+                apply_manual_gross_to_bucket(combined, manual)
+                if combined["subtotal"] <= 0 and combined["total"] <= 0:
+                    continue
+                branch_buckets[day_key] = combined
+
             by_branch[branch_id] = branch_buckets
 
         return by_branch
@@ -122,12 +140,20 @@ class EerrService:
         *,
         year: int,
         month: int,
+        branch_office_id: int | None = None,
     ) -> EerrMonthResponse:
         self._require_admin(user)
         if month < 1 or month > 12:
             raise EerrValidationError("Mes no válido")
         if year < 2000 or year > 2100:
             raise EerrValidationError("Año no válido")
+
+        filter_branch_id: int | None = None
+        if branch_office_id is not None and branch_office_id >= 1:
+            branch_row = self.db.get(BranchOffice, branch_office_id)
+            if branch_row is None or not branch_row.is_active:
+                raise EerrValidationError("Sucursal no válida")
+            filter_branch_id = branch_office_id
 
         month_prefix = f"{year}-{month:02d}"
         today = business_today()
@@ -137,7 +163,12 @@ class EerrService:
         branch_name_by_id = {
             int(b.id): (b.branch_office or f"Sucursal {b.id}") for b in branches
         }
-        revenue_by_branch = self._revenue_buckets_by_branch(user)
+        revenue_by_branch = self._revenue_buckets_by_branch(
+            user,
+            year=year,
+            month=month,
+            branch_office_id=filter_branch_id,
+        )
         buckets = self._merge_revenue_buckets_all_branches(revenue_by_branch)
 
         revenue_subtotal = 0
@@ -156,9 +187,10 @@ class EerrService:
             totals = buckets[day_key]
             if totals["subtotal"] <= 0 and totals["total"] <= 0:
                 continue
-            day_gross = int(totals["total"])
-            day_net, _ = _net_and_vat_from_gross(day_gross)
-            revenue_total += day_gross
+            day_net = int(totals["subtotal"])
+            revenue_subtotal += day_net
+            revenue_iva += int(totals["iva"])
+            revenue_total += int(totals["total"])
             revenue_cash_total += int(totals.get("cash_total", 0))
             revenue_transbank_gross += int(totals.get("transbank_gross", 0))
             revenue_cash_plain_net += int(totals.get("cash_plain_net", 0))
@@ -166,22 +198,21 @@ class EerrService:
             revenue_cash_receipt_net += int(totals.get("cash_receipt_net", 0))
             revenue_cash_receipt_iva += int(totals.get("cash_receipt_iva", 0))
             branch_items: list[EerrDetailItem] = []
-            for branch_id, branch_buckets in sorted(revenue_by_branch.items()):
-                branch_totals = branch_buckets.get(day_key)
-                if branch_totals is None:
-                    continue
-                branch_gross = int(branch_totals["total"])
-                if branch_gross <= 0 and int(branch_totals["subtotal"]) <= 0:
-                    continue
-                branch_net, _ = _net_and_vat_from_gross(branch_gross)
-                branch_items.append(
-                    EerrDetailItem(
-                        id=f"day:{day_key}:branch:{branch_id}",
-                        date=day_key,
-                        description=branch_name_by_id.get(branch_id, f"Sucursal {branch_id}"),
-                        amount=branch_net,
-                    ),
-                )
+            if filter_branch_id is None:
+                for branch_id, branch_buckets in sorted(revenue_by_branch.items()):
+                    branch_totals = branch_buckets.get(day_key)
+                    if branch_totals is None:
+                        continue
+                    if int(branch_totals["subtotal"]) <= 0 and int(branch_totals["total"]) <= 0:
+                        continue
+                    branch_items.append(
+                        EerrDetailItem(
+                            id=f"day:{day_key}:branch:{branch_id}",
+                            date=day_key,
+                            description=branch_name_by_id.get(branch_id, f"Sucursal {branch_id}"),
+                            amount=int(branch_totals["subtotal"]),
+                        ),
+                    )
             revenue_items.append(
                 EerrDetailItem(
                     id=f"day:{day_key}",
@@ -192,9 +223,7 @@ class EerrService:
                 ),
             )
 
-        revenue_subtotal, revenue_iva = _net_and_vat_from_gross(revenue_total)
-
-        branch_ids = [int(b.id) for b in branches]
+        branch_ids = [filter_branch_id] if filter_branch_id is not None else [int(b.id) for b in branches]
 
         washer_pay_total = 0
         washer_items: list[EerrDetailItem] = []
@@ -226,7 +255,7 @@ class EerrService:
                 ),
             )
 
-        expense_rows = self._expenses.list_for_user(user)
+        expense_rows = self._expenses.list_for_user(user, branch_office_id=filter_branch_id)
         by_type: dict[str, list] = defaultdict(list)
         for row in expense_rows:
             date_key = _expense_date_key(row.expense_date, row.added_date)
@@ -297,9 +326,16 @@ class EerrService:
         net_profit = revenue_subtotal - washer_pay_total - expenses_total
         gross_liquid_total = revenue_total - washer_pay_total - expenses_total
 
+        response_branch_id = str(filter_branch_id) if filter_branch_id is not None else "0"
+        response_branch_name = (
+            branch_name_by_id.get(filter_branch_id, f"Sucursal {filter_branch_id}")
+            if filter_branch_id is not None
+            else "General"
+        )
+
         return EerrMonthResponse(
-            branch_office_id="0",
-            branch_name="General",
+            branch_office_id=response_branch_id,
+            branch_name=response_branch_name,
             year=year,
             month=month,
             revenue_subtotal=revenue_subtotal,
