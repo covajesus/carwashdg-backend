@@ -476,24 +476,23 @@ class TicketService:
         return False
 
     def _apply_revenue_day_filter(self, stmt, revenue_day: date):
+        """SQL prefilter: tickets whose added or updated timestamp falls on the day.
+
+        Final matching uses ticket_revenue_day() in Python so collected-by-label
+        tickets and paid rows without updated_date stay aligned with earnings.
+        """
         day_start = datetime.combine(revenue_day, time.min)
         day_end = datetime.combine(revenue_day, time(23, 59, 59, 999999))
-        collected = or_(
-            Ticket.payment_type_id.in_(tuple(PAID_PAYMENT_TYPE_IDS)),
-            Ticket.status_id == TICKET_STATUS_PAID_ID,
-        )
         return stmt.where(
             or_(
                 and_(
-                    collected,
+                    Ticket.added_date >= day_start,
+                    Ticket.added_date <= day_end,
+                ),
+                and_(
                     Ticket.updated_date.isnot(None),
                     Ticket.updated_date >= day_start,
                     Ticket.updated_date <= day_end,
-                ),
-                and_(
-                    ~collected,
-                    Ticket.added_date >= day_start,
-                    Ticket.added_date <= day_end,
                 ),
             ),
         )
@@ -719,6 +718,12 @@ class TicketService:
             stmt = self._apply_revenue_day_filter(stmt, effective_day)
 
         rows = list(self.db.scalars(stmt).all())
+        if effective_day is not None:
+            rows = [
+                row
+                for row in rows
+                if self.ticket_revenue_day(row) == effective_day
+            ]
         ticket_ids = [int(row.id) for row in rows if row.id is not None]
         if not ticket_ids:
             return []
