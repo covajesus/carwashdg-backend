@@ -38,6 +38,10 @@ def empty_earnings_bucket() -> dict[str, int]:
         "total": 0,
         "cash_total": 0,
         "transbank_gross": 0,
+        "cash_plain_net": 0,
+        "cash_receipt_gross": 0,
+        "cash_receipt_net": 0,
+        "cash_receipt_iva": 0,
     }
 
 
@@ -51,6 +55,7 @@ def apply_manual_gross_to_bucket(bucket: dict[str, int], gross_amount: int) -> N
     bucket["iva"] += pricing["iva"]
     bucket["total"] += pricing["total"]
     bucket["cash_total"] += gross_amount
+    bucket["cash_plain_net"] += gross_amount
 
 
 class CollectionService:

@@ -290,12 +290,37 @@ class TicketService:
         ]
 
     @staticmethod
+    def _accumulate_cash_breakdown(bucket: dict[str, int], row: Ticket) -> None:
+        """Efectivo sin boleta (neto) vs efectivo con boleta (bruto → neto + IVA)."""
+        efectivo, transbank = TicketService._payment_split_amounts(row)
+        if transbank > 0:
+            if efectivo > 0:
+                bucket["cash_plain_net"] += efectivo
+            return
+
+        cash_amount = efectivo
+        if cash_amount <= 0 and row.payment_type_id == PAYMENT_TYPE_EFECTIVO:
+            cash_amount = parse_ticket_total(row.total) or 0
+        if cash_amount <= 0:
+            return
+
+        tax = parse_ticket_total(row.tax) or 0
+        if tax > 0:
+            bucket["cash_receipt_gross"] += cash_amount
+            breakdown = ticket_totals_from_subtotal(cash_amount, apply_iva=True)
+            bucket["cash_receipt_net"] += int(breakdown["subtotal"])
+            bucket["cash_receipt_iva"] += int(breakdown["iva"])
+        else:
+            bucket["cash_plain_net"] += cash_amount
+
+    @staticmethod
     def _accumulate_ticket_into_earnings_bucket(
         bucket: dict[str, int],
         *,
         pricing: dict[str, int],
         cash: int,
         transbank: int,
+        ticket_row: Ticket | None = None,
     ) -> None:
         bucket["ticket_count"] += 1
         bucket["subtotal"] += pricing["subtotal"]
@@ -303,6 +328,8 @@ class TicketService:
         bucket["total"] += pricing["total"]
         bucket["cash_total"] += cash
         bucket["transbank_gross"] += transbank
+        if ticket_row is not None:
+            TicketService._accumulate_cash_breakdown(bucket, ticket_row)
 
     def _ticket_matches_branch(self, ticket_id: int, branch_office_id: int) -> bool:
         if self._branch_id_for_ticket(ticket_id) == str(branch_office_id):
@@ -806,6 +833,7 @@ class TicketService:
                 pricing=pricing,
                 cash=cash,
                 transbank=transbank,
+                ticket_row=row,
             )
 
         return dict(buckets)
