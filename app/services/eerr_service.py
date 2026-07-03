@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.branch_scope import branch_scope_for_user
 from app.core.datetime_utils import business_today
+from app.core.pricing import ticket_totals_from_subtotal
 from app.models.branch_office import BranchOffice
 from app.schemas.eerr import EerrAccountLine, EerrDetailItem, EerrMonthResponse
 from app.services.collection_service import empty_earnings_bucket
@@ -53,6 +54,14 @@ def _expense_date_key(expense_date, added_date) -> str | None:
         if len(text) >= 10:
             return text[:10]
     return None
+
+
+def _net_and_vat_from_gross(gross: int) -> tuple[int, int]:
+    """Neto e IVA (19%) a partir del total bruto con IVA incluido."""
+    if gross <= 0:
+        return 0, 0
+    breakdown = ticket_totals_from_subtotal(gross, apply_iva=True)
+    return int(breakdown["subtotal"]), int(breakdown["iva"])
 
 
 class EerrService:
@@ -135,23 +144,24 @@ class EerrService:
             totals = buckets[day_key]
             if totals["subtotal"] <= 0 and totals["total"] <= 0:
                 continue
-            revenue_subtotal += totals["subtotal"]
-            revenue_iva += totals["iva"]
-            revenue_total += totals["total"]
+            day_gross = int(totals["total"])
+            day_net, _ = _net_and_vat_from_gross(day_gross)
+            revenue_total += day_gross
             branch_items: list[EerrDetailItem] = []
             for branch_id, branch_buckets in sorted(revenue_by_branch.items()):
                 branch_totals = branch_buckets.get(day_key)
                 if branch_totals is None:
                     continue
-                branch_subtotal = int(branch_totals["subtotal"])
-                if branch_subtotal <= 0 and int(branch_totals["total"]) <= 0:
+                branch_gross = int(branch_totals["total"])
+                if branch_gross <= 0 and int(branch_totals["subtotal"]) <= 0:
                     continue
+                branch_net, _ = _net_and_vat_from_gross(branch_gross)
                 branch_items.append(
                     EerrDetailItem(
                         id=f"day:{day_key}:branch:{branch_id}",
                         date=day_key,
                         description=branch_name_by_id.get(branch_id, f"Sucursal {branch_id}"),
-                        amount=branch_subtotal,
+                        amount=branch_net,
                     ),
                 )
             revenue_items.append(
@@ -159,10 +169,12 @@ class EerrService:
                     id=f"day:{day_key}",
                     date=day_key,
                     description="Recaudación del día",
-                    amount=totals["subtotal"],
+                    amount=day_net,
                     items=branch_items,
                 ),
             )
+
+        revenue_subtotal, revenue_iva = _net_and_vat_from_gross(revenue_total)
 
         branch_ids = [int(b.id) for b in branches]
 
