@@ -68,12 +68,12 @@ class EerrService:
         if branch_scope_for_user(user) is not None:
             raise EerrForbiddenError()
 
-    def _revenue_buckets_all_branches(
+    def _revenue_buckets_by_branch(
         self,
         user: UserPublic,
-    ) -> dict[str, dict[str, int]]:
+    ) -> dict[int, dict[str, dict[str, int]]]:
         branches = self.db.scalars(select(BranchOffice).order_by(BranchOffice.id)).all()
-        buckets: dict[str, dict[str, int]] = {}
+        by_branch: dict[int, dict[str, dict[str, int]]] = {}
 
         for branch in branches:
             branch_id = int(branch.id)
@@ -81,14 +81,24 @@ class EerrService:
             try:
                 if mgmt == 1:
                     branch_buckets = self._tickets.ticket_earnings_date_buckets(user, branch_id)
-                    _merge_date_buckets(buckets, branch_buckets)
                 elif mgmt == 2:
                     branch_buckets: dict[str, dict[str, int]] = {}
                     self._collections.merge_into_date_buckets(branch_buckets, branch_id)
-                    _merge_date_buckets(buckets, branch_buckets)
+                else:
+                    branch_buckets = {}
             except TicketValidationError as exc:
                 raise EerrValidationError(str(exc)) from exc
+            by_branch[branch_id] = branch_buckets
 
+        return by_branch
+
+    @staticmethod
+    def _merge_revenue_buckets_all_branches(
+        by_branch: dict[int, dict[str, dict[str, int]]],
+    ) -> dict[str, dict[str, int]]:
+        buckets: dict[str, dict[str, int]] = {}
+        for branch_buckets in by_branch.values():
+            _merge_date_buckets(buckets, branch_buckets)
         return buckets
 
     def build_month(
@@ -108,7 +118,10 @@ class EerrService:
         today = business_today()
         last_day = calendar.monthrange(year, month)[1]
 
-        buckets = self._revenue_buckets_all_branches(user)
+        branches = self.db.scalars(select(BranchOffice).order_by(BranchOffice.id)).all()
+        branch_name_by_id = {int(b.id): (b.name or f"Sucursal {b.id}") for b in branches}
+        revenue_by_branch = self._revenue_buckets_by_branch(user)
+        buckets = self._merge_revenue_buckets_all_branches(revenue_by_branch)
 
         revenue_subtotal = 0
         revenue_iva = 0
@@ -123,16 +136,32 @@ class EerrService:
             revenue_subtotal += totals["subtotal"]
             revenue_iva += totals["iva"]
             revenue_total += totals["total"]
+            branch_items: list[EerrDetailItem] = []
+            for branch_id, branch_buckets in sorted(revenue_by_branch.items()):
+                branch_totals = branch_buckets.get(day_key)
+                if branch_totals is None:
+                    continue
+                branch_subtotal = int(branch_totals["subtotal"])
+                if branch_subtotal <= 0 and int(branch_totals["total"]) <= 0:
+                    continue
+                branch_items.append(
+                    EerrDetailItem(
+                        id=f"day:{day_key}:branch:{branch_id}",
+                        date=day_key,
+                        description=branch_name_by_id.get(branch_id, f"Sucursal {branch_id}"),
+                        amount=branch_subtotal,
+                    ),
+                )
             revenue_items.append(
                 EerrDetailItem(
                     id=f"day:{day_key}",
                     date=day_key,
                     description="Recaudación del día",
                     amount=totals["subtotal"],
+                    items=branch_items,
                 ),
             )
 
-        branches = self.db.scalars(select(BranchOffice).order_by(BranchOffice.id)).all()
         branch_ids = [int(b.id) for b in branches]
 
         washer_pay_total = 0
@@ -234,6 +263,7 @@ class EerrService:
 
         expenses_total = expenses_operational_total + arriendo_total
         net_profit = revenue_subtotal - washer_pay_total - expenses_total
+        gross_liquid_total = revenue_total - washer_pay_total - expenses_total
 
         return EerrMonthResponse(
             branch_office_id="0",
@@ -248,5 +278,6 @@ class EerrService:
             arriendo_total=arriendo_total,
             expenses_total=expenses_total,
             net_profit=net_profit,
+            gross_liquid_total=gross_liquid_total,
             accounts=accounts,
         )

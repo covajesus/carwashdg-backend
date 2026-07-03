@@ -6,6 +6,7 @@ class EerrDetailItem(BaseModel):
     date: str | None = None
     description: str
     amount: int = Field(ge=0)
+    items: list["EerrDetailItem"] = Field(default_factory=list)
 
 
 class EerrAccountLine(BaseModel):
@@ -29,4 +30,7 @@ class EerrMonthResponse(BaseModel):
     arriendo_total: int = Field(ge=0)
     expenses_total: int = Field(ge=0)
     net_profit: int
+    gross_liquid_total: int = Field(
+        description="Ingresos brutos (con IVA) menos gastos y costos del mes",
+    )
     accounts: list[EerrAccountLine]
