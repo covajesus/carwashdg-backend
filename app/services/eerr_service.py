@@ -119,7 +119,9 @@ class EerrService:
         last_day = calendar.monthrange(year, month)[1]
 
         branches = self.db.scalars(select(BranchOffice).order_by(BranchOffice.id)).all()
-        branch_name_by_id = {int(b.id): (b.name or f"Sucursal {b.id}") for b in branches}
+        branch_name_by_id = {
+            int(b.id): (b.branch_office or f"Sucursal {b.id}") for b in branches
+        }
         revenue_by_branch = self._revenue_buckets_by_branch(user)
         buckets = self._merge_revenue_buckets_all_branches(revenue_by_branch)
 
