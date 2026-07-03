@@ -291,7 +291,7 @@ class TicketService:
 
     @staticmethod
     def _accumulate_cash_breakdown(bucket: dict[str, int], row: Ticket) -> None:
-        """Efectivo sin boleta (neto) vs efectivo con boleta (bruto → neto + IVA)."""
+        """Efectivo sin boleta/factura (neto) vs efectivo con boleta/factura (bruto → neto + IVA)."""
         efectivo, transbank = TicketService._payment_split_amounts(row)
         if transbank > 0:
             if efectivo > 0:
