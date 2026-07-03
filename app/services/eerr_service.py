@@ -40,6 +40,8 @@ def _merge_date_buckets(
         bucket["subtotal"] += totals["subtotal"]
         bucket["iva"] += totals["iva"]
         bucket["total"] += totals["total"]
+        bucket["cash_total"] += totals.get("cash_total", 0)
+        bucket["transbank_gross"] += totals.get("transbank_gross", 0)
 
 
 def _expense_date_key(expense_date, added_date) -> str | None:
@@ -137,6 +139,8 @@ class EerrService:
         revenue_subtotal = 0
         revenue_iva = 0
         revenue_total = 0
+        revenue_cash_total = 0
+        revenue_transbank_gross = 0
         revenue_items: list[EerrDetailItem] = []
         for day_key in sorted(buckets.keys()):
             if not day_key.startswith(month_prefix):
@@ -147,6 +151,8 @@ class EerrService:
             day_gross = int(totals["total"])
             day_net, _ = _net_and_vat_from_gross(day_gross)
             revenue_total += day_gross
+            revenue_cash_total += int(totals.get("cash_total", 0))
+            revenue_transbank_gross += int(totals.get("transbank_gross", 0))
             branch_items: list[EerrDetailItem] = []
             for branch_id, branch_buckets in sorted(revenue_by_branch.items()):
                 branch_totals = branch_buckets.get(day_key)
@@ -287,6 +293,8 @@ class EerrService:
             revenue_subtotal=revenue_subtotal,
             revenue_iva=revenue_iva,
             revenue_total=revenue_total,
+            revenue_cash_total=revenue_cash_total,
+            revenue_transbank_gross=revenue_transbank_gross,
             washer_pay_total=washer_pay_total,
             expenses_operational_total=expenses_operational_total,
             arriendo_total=arriendo_total,

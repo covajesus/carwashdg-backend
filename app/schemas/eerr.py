@@ -25,6 +25,8 @@ class EerrMonthResponse(BaseModel):
     revenue_subtotal: int = Field(ge=0)
     revenue_iva: int = Field(ge=0)
     revenue_total: int = Field(ge=0)
+    revenue_cash_total: int = Field(ge=0, default=0)
+    revenue_transbank_gross: int = Field(ge=0, default=0)
     washer_pay_total: int = Field(ge=0)
     expenses_operational_total: int = Field(ge=0)
     arriendo_total: int = Field(ge=0)

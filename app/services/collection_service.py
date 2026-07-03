@@ -50,6 +50,7 @@ def apply_manual_gross_to_bucket(bucket: dict[str, int], gross_amount: int) -> N
     bucket["subtotal"] += pricing["subtotal"]
     bucket["iva"] += pricing["iva"]
     bucket["total"] += pricing["total"]
+    bucket["cash_total"] += gross_amount
 
 
 class CollectionService:
