@@ -2,7 +2,7 @@ from collections import defaultdict
 from datetime import date, datetime, time
 
 from sqlalchemy import and_, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from app.core.datetime_utils import business_local_date, business_now, business_today, datetime_to_iso
 
@@ -682,6 +682,7 @@ class TicketService:
         branch_id: str | None = None,
         customer_name: str | None = None,
         pricing: dict[str, int] | None = None,
+        include_photo: bool = True,
     ) -> TicketListItem:
         ticket_id = int(row.id) if row.id is not None else 0
         resolved_pricing = pricing if pricing is not None else self._ticket_pricing(ticket_id, row)
@@ -718,7 +719,7 @@ class TicketService:
             assigneeLabel=assignee_label,
             assigneeWasherId=assignee_washer_id,
             assigneeGroupId=assignee_group_id,
-            photo_url=self._normalize_photo(row.photo_url),
+            photo_url=self._normalize_photo(row.photo_url) if include_photo else None,
             revenueDay=revenue_day.isoformat() if revenue_day is not None else None,
             paymentEfectivoAmount=efectivo_amount if efectivo_amount > 0 else None,
             paymentTransbankAmount=transbank_amount if transbank_amount > 0 else None,
@@ -740,7 +741,7 @@ class TicketService:
         scope = self._branch_scope_for_user(user)
         effective_day = business_today() if scope is not None else revenue_day
 
-        stmt = self._list_stmt_for_user(user)
+        stmt = self._list_stmt_for_user(user).options(defer(Ticket.photo_url))
         if effective_day is not None:
             stmt = self._apply_revenue_day_filter(stmt, effective_day)
 
@@ -767,6 +768,7 @@ class TicketService:
                 branch_id=str(branch_ids.get(int(row.id), "")) if row.id is not None else "",
                 customer_name=customer_names.get(int(row.id), "—") if row.id is not None else "—",
                 pricing=pricing_by_ticket.get(int(row.id)) if row.id is not None else None,
+                include_photo=False,
             )
             for row in rows
             if row.id is not None
