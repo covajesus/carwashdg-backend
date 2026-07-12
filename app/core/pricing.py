@@ -35,18 +35,18 @@ def ticket_totals_from_subtotal(
 
 
 def split_mixed_payment_totals(
-    efectivo: Decimal | int | float,
-    transbank_gross: Decimal | int | float,
+    cash: Decimal | int | float,
+    card_gross: Decimal | int | float,
 ) -> dict[str, int]:
-    """Efectivo sin IVA en el desglose; solo Transbank como bruto con IVA incluido."""
-    efectivo_int = round_money(efectivo)
-    tb = round_money(transbank_gross)
-    if tb <= 0:
-        total_mixed = efectivo_int + tb
+    """Mixed payment: cash without VAT; only card gross includes VAT."""
+    cash_int = round_money(cash)
+    card_int = round_money(card_gross)
+    if card_int <= 0:
+        total_mixed = cash_int + card_int
         return {"subtotal": total_mixed, "iva": 0, "tax": 0, "total": total_mixed}
 
-    net_tb = round_money(Decimal(tb) / TICKET_IVA_GROSS_FACTOR)
-    tax = tb - net_tb
-    subtotal = efectivo_int + net_tb
-    total_out = efectivo_int + tb
+    card_net = round_money(Decimal(card_int) / TICKET_IVA_GROSS_FACTOR)
+    tax = card_int - card_net
+    subtotal = cash_int + card_net
+    total_out = cash_int + card_int
     return {"subtotal": subtotal, "iva": tax, "tax": tax, "total": total_out}

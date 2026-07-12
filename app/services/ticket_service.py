@@ -463,36 +463,45 @@ class TicketService:
     def _ticket_has_payment(row: Ticket) -> bool:
         return row.payment_type_id in PAID_PAYMENT_TYPE_IDS
 
-    @staticmethod
-    def _infer_apply_iva_from_row(row: Ticket) -> bool:
-        if row.payment_type_id in (PAYMENT_TYPE_TRANSBANK, PAYMENT_TYPE_MIXED):
-            return True
-        _, transbank = TicketService._payment_split_amounts(row)
-        if transbank > 0:
-            return True
-        tax = parse_ticket_total(row.tax)
-        if tax is not None:
-            return tax > 0
-        return False
-
     def _ticket_pricing(self, ticket_id: int, row: Ticket | None = None) -> dict[str, int]:
-        if row is not None:
-            stored = self._stored_pricing(row)
+        ticket_row = row if row is not None else self.db.get(Ticket, ticket_id)
+        if ticket_row is not None:
+            cash, card = self._payment_split_amounts(ticket_row)
+            # Mixed: VAT (19%) applies only to the card amount, never the full total.
+            if cash > 0 and card > 0:
+                return split_mixed_payment_totals(cash, card)
+            stored = self._stored_pricing(ticket_row)
             if stored is not None:
                 return stored
-        ticket_row = row if row is not None else self.db.get(Ticket, ticket_id)
         lines = self._lines.list_lines_for_ticket(ticket_id)
         gross = sum(line.price for line in lines)
-        if ticket_row is not None and ticket_row.payment_type_id == PAYMENT_TYPE_MIXED:
-            efectivo, transbank = self._payment_split_amounts(ticket_row)
-            if efectivo > 0 and transbank > 0:
-                return split_mixed_payment_totals(efectivo, transbank)
         apply_iva = (
             self._infer_apply_iva_from_row(ticket_row)
             if ticket_row is not None
             else False
         )
         return ticket_totals_from_subtotal(gross, apply_iva=apply_iva)
+
+    @staticmethod
+    def _infer_apply_iva_from_row(row: Ticket) -> bool:
+        """True only when VAT applies to the full gross (e.g. card-only).
+
+        Mixed payments compute VAT separately via split_mixed_payment_totals.
+        """
+        if row.payment_type_id == PAYMENT_TYPE_TRANSBANK:
+            return True
+        if row.payment_type_id == PAYMENT_TYPE_MIXED:
+            return False
+        cash, card = TicketService._payment_split_amounts(row)
+        if card > 0:
+            # Implicit mixed (cash + card): do not apply VAT to full gross.
+            if cash > 0:
+                return False
+            return True
+        tax = parse_ticket_total(row.tax)
+        if tax is not None:
+            return tax > 0
+        return False
 
     @staticmethod
     def _resolve_apply_iva(data: TicketCreate) -> bool:
@@ -648,6 +657,10 @@ class TicketService:
             if row.id is None:
                 continue
             tid = int(row.id)
+            cash, card = self._payment_split_amounts(row)
+            if cash > 0 and card > 0:
+                pricing_by_ticket[tid] = split_mixed_payment_totals(cash, card)
+                continue
             stored = self._stored_pricing(row)
             if stored is not None:
                 pricing_by_ticket[tid] = stored
@@ -666,9 +679,9 @@ class TicketService:
                 continue
             gross = line_gross.get(tid, 0)
             if row.payment_type_id == PAYMENT_TYPE_MIXED:
-                efectivo, transbank = self._payment_split_amounts(row)
-                if efectivo > 0 and transbank > 0:
-                    pricing_by_ticket[tid] = split_mixed_payment_totals(efectivo, transbank)
+                cash, card = self._payment_split_amounts(row)
+                if cash > 0 and card > 0:
+                    pricing_by_ticket[tid] = split_mixed_payment_totals(cash, card)
                     continue
             apply_iva = self._infer_apply_iva_from_row(row)
             pricing_by_ticket[tid] = ticket_totals_from_subtotal(gross, apply_iva=apply_iva)
@@ -1298,10 +1311,6 @@ class TicketService:
             if row.payment_type_id in PAID_PAYMENT_TYPE_IDS:
                 if "gross_amount" in patch:
                     raise TicketValidationError("No se puede cambiar el monto de un ticket ya cobrado")
-                if "washer_id" in patch or "washer_daily_group_id" in patch:
-                    raise TicketValidationError(
-                        "No se puede cambiar el lavador de un ticket ya cobrado",
-                    )
             payment_patch_keys = {
                 "payment_type_id",
                 "payment_efectivo_amount",

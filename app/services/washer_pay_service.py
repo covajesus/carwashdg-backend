@@ -735,9 +735,9 @@ class WasherPayService:
         card_gross: int,
         effective_pct: Decimal,
     ) -> tuple[int, int, int, int]:
-        """IVA tarjeta, total calculado (bruto − IVA), comisión %, total con redondeo."""
+        """Card VAT only, net total (gross − card VAT), commission %, coin-rounded pay."""
         card_iva = self._card_iva_from_gross(card_gross)
-        total_calculado = self._apply_coin_round(max(0, gross_total - card_iva))
+        total_calculado = max(0, gross_total - card_iva)
         commission_before = round_money(
             Decimal(total_calculado) * effective_pct / Decimal("100"),
         )
@@ -745,10 +745,10 @@ class WasherPayService:
         return card_iva, total_calculado, commission_before, final_amount
 
     def _card_iva_from_gross(self, card_gross: int) -> int:
+        """VAT embedded in card gross (not coin-rounded)."""
         if card_gross <= 0:
             return 0
-        raw = card_gross - round_money(Decimal(card_gross) / TICKET_IVA_GROSS_FACTOR)
-        return self._apply_coin_round(raw)
+        return card_gross - round_money(Decimal(card_gross) / TICKET_IVA_GROSS_FACTOR)
 
     def _build_pay_breakdown(
         self,
@@ -770,9 +770,9 @@ class WasherPayService:
         final_label = "Total a pagar por el grupo" if is_group else "Total a pagar"
         rows: list[WasherPayBreakdownRow] = [
             WasherPayBreakdownRow(label=first_label, amount=gross_total),
-            WasherPayBreakdownRow(label="Tarjeta", amount=card_gross),
-            WasherPayBreakdownRow(label="IVA (19%)", amount=card_iva),
-            WasherPayBreakdownRow(label="Total calculado", amount=total_calculado),
+            WasherPayBreakdownRow(label="Tarjeta (bruto)", amount=card_gross),
+            WasherPayBreakdownRow(label="− IVA solo tarjeta (19%)", amount=card_iva),
+            WasherPayBreakdownRow(label="Total neto (efectivo + tarjeta)", amount=total_calculado),
             WasherPayBreakdownRow(
                 label=commission_label,
                 amount=commission_before,
