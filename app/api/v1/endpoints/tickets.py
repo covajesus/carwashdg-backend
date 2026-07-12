@@ -154,7 +154,11 @@ def update_ticket(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.delete("/{ticket_id}", response_model=TicketDeleteResponse, responses={404: {"model": ErrorResponse}})
+@router.delete(
+    "/{ticket_id}",
+    response_model=TicketDeleteResponse,
+    responses={400: {"model": ErrorResponse}, 403: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+)
 def delete_ticket(
     ticket_id: int,
     service: TicketServiceDep,
@@ -164,4 +168,6 @@ def delete_ticket(
         service.delete(ticket_id, current_user)
     except TicketNotFoundError as exc:
         raise HTTPException(status_code=404, detail="No encontrado") from exc
+    except TicketValidationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     return TicketDeleteResponse()

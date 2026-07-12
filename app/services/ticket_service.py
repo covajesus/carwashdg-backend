@@ -1374,7 +1374,9 @@ class TicketService:
         return self.to_public(row)
 
     def delete(self, ticket_id: int, user: UserPublic) -> None:
-        """Elimina el ticket y todas sus líneas en tickets_branch_offices_services (soft delete)."""
+        """Soft-delete ticket and its service lines. Admin only."""
+        if user.role != "admin":
+            raise TicketValidationError("Solo el administrador puede eliminar tickets")
         row = self._get_visible_ticket(ticket_id, user)
         now = self._now()
         try:
