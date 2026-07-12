@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 
 from app.core.branch_scope import branch_scope_for_user
 from app.core.datetime_utils import business_now, business_today
-from app.core.pricing import ticket_totals_from_subtotal
 from app.models.branch_collection import BranchCollection
 from app.models.branch_office import BranchOffice
 from app.schemas.collection import (
@@ -46,16 +45,55 @@ def empty_earnings_bucket() -> dict[str, int]:
 
 
 def apply_manual_gross_to_bucket(bucket: dict[str, int], gross_amount: int) -> None:
-    if gross_amount <= 0:
+    """Legacy: treat entire manual amount as cash without VAT."""
+    apply_manual_breakdown_to_bucket(bucket, cash_amount=gross_amount, card_gross=0, card_tax=0)
+
+
+def apply_manual_breakdown_to_bucket(
+    bucket: dict[str, int],
+    *,
+    cash_amount: int,
+    card_gross: int,
+    card_tax: int,
+) -> None:
+    cash = max(0, int(cash_amount))
+    card = max(0, int(card_gross))
+    tax = max(0, int(card_tax))
+    if card <= 0:
+        card = 0
+        tax = 0
+    if tax > card:
+        tax = card
+    if cash <= 0 and card <= 0:
         return
-    pricing = ticket_totals_from_subtotal(gross_amount, apply_iva=False)
+
     if bucket["ticket_count"] == 0:
         bucket["ticket_count"] = 1
-    bucket["subtotal"] += pricing["subtotal"]
-    bucket["iva"] += pricing["iva"]
-    bucket["total"] += pricing["total"]
-    bucket["cash_total"] += gross_amount
-    bucket["cash_plain_net"] += gross_amount
+
+    card_net = card - tax
+    bucket["subtotal"] += cash + card_net
+    bucket["iva"] += tax
+    bucket["total"] += cash + card
+    bucket["cash_total"] += cash
+    bucket["cash_plain_net"] += cash
+    bucket["transbank_gross"] += card
+
+
+def manual_breakdown_from_row(row: BranchCollection) -> dict[str, int]:
+    cash = int(getattr(row, "cash_amount", 0) or 0)
+    card = int(getattr(row, "card_gross", 0) or 0)
+    tax = int(getattr(row, "card_tax", 0) or 0)
+    gross = int(row.gross_amount or 0)
+    if cash <= 0 and card <= 0 and gross > 0:
+        cash = gross
+    if card <= 0:
+        tax = 0
+    return {
+        "cash_amount": cash,
+        "card_gross": card,
+        "card_tax": tax,
+        "gross_amount": cash + card,
+    }
 
 
 class CollectionService:
@@ -126,26 +164,54 @@ class CollectionService:
             amounts[day_key] = max(0, int(gross_amount or 0))
         return amounts
 
-    def _manual_gross_by_day_key(self, branch_office_id: int) -> dict[str, int]:
-        amounts = self._legacy_manual_by_day(branch_office_id)
+    def _manual_breakdown_by_day_key(
+        self,
+        branch_office_id: int,
+    ) -> dict[str, dict[str, int]]:
+        by_day: dict[str, dict[str, int]] = {}
+        for day_key, gross in self._legacy_manual_by_day(branch_office_id).items():
+            amount = max(0, int(gross))
+            by_day[day_key] = {
+                "cash_amount": amount,
+                "card_gross": 0,
+                "card_tax": 0,
+                "gross_amount": amount,
+            }
         for row in self.db.scalars(
             self._active_stmt().where(
                 BranchCollection.branch_office_id == branch_office_id,
             ),
         ).all():
-            if row.collection_date is None or row.gross_amount <= 0:
+            if row.collection_date is None:
                 continue
             day_key = self._day_key(row.collection_date)
             if day_key is None:
                 continue
-            amounts[day_key] = max(0, int(row.gross_amount or 0))
-        return amounts
+            breakdown = manual_breakdown_from_row(row)
+            if breakdown["gross_amount"] <= 0:
+                continue
+            by_day[day_key] = breakdown
+        return by_day
+
+    def _manual_gross_by_day_key(self, branch_office_id: int) -> dict[str, int]:
+        return {
+            day_key: int(row["gross_amount"])
+            for day_key, row in self._manual_breakdown_by_day_key(branch_office_id).items()
+        }
+
+    def get_manual_breakdown(
+        self,
+        branch_office_id: int,
+        collection_date: date,
+    ) -> dict[str, int]:
+        day_key = self._day_key(collection_date)
+        empty = {"cash_amount": 0, "card_gross": 0, "card_tax": 0, "gross_amount": 0}
+        if day_key is None:
+            return empty
+        return self._manual_breakdown_by_day_key(branch_office_id).get(day_key, empty)
 
     def get_manual_gross(self, branch_office_id: int, collection_date: date) -> int:
-        day_key = self._day_key(collection_date)
-        if day_key is None:
-            return 0
-        return self._manual_gross_by_day_key(branch_office_id).get(day_key, 0)
+        return int(self.get_manual_breakdown(branch_office_id, collection_date)["gross_amount"])
 
     def list_manual_for_branch(self, branch_office_id: int) -> list[BranchCollection]:
         rows = list(
@@ -220,14 +286,22 @@ class CollectionService:
         revenue_day: date | None = None,
     ) -> None:
         for row in self.list_manual_for_branch(branch_office_id):
-            if row.collection_date is None or row.gross_amount <= 0:
+            if row.collection_date is None:
+                continue
+            breakdown = manual_breakdown_from_row(row)
+            if breakdown["gross_amount"] <= 0:
                 continue
             if revenue_day is not None and row.collection_date != revenue_day:
                 continue
             day_key = row.collection_date.isoformat()
             if day_key not in buckets:
                 buckets[day_key] = empty_earnings_bucket()
-            apply_manual_gross_to_bucket(buckets[day_key], int(row.gross_amount))
+            apply_manual_breakdown_to_bucket(
+                buckets[day_key],
+                cash_amount=breakdown["cash_amount"],
+                card_gross=breakdown["card_gross"],
+                card_tax=breakdown["card_tax"],
+            )
 
     def merge_into_branch_buckets(
         self,
@@ -236,14 +310,20 @@ class CollectionService:
         branch_office_id: int | None = None,
     ) -> None:
         for row in self.list_manual_all():
-            if row.gross_amount <= 0:
+            breakdown = manual_breakdown_from_row(row)
+            if breakdown["gross_amount"] <= 0:
                 continue
             key = int(row.branch_office_id)
             if branch_office_id is not None and key != branch_office_id:
                 continue
             if key not in buckets:
                 buckets[key] = empty_earnings_bucket()
-            apply_manual_gross_to_bucket(buckets[key], int(row.gross_amount))
+            apply_manual_breakdown_to_bucket(
+                buckets[key],
+                cash_amount=breakdown["cash_amount"],
+                card_gross=breakdown["card_gross"],
+                card_tax=breakdown["card_tax"],
+            )
 
     def upsert(
         self,
@@ -256,7 +336,13 @@ class CollectionService:
         self._validate_branch(branch_office_id)
         self._assert_branch_access(user, branch_office_id)
 
-        gross = int(data.gross_amount)
+        cash = int(data.cash_amount or 0)
+        card = int(data.card_gross or 0)
+        card_tax = int(data.card_tax or 0)
+        if card <= 0:
+            card = 0
+            card_tax = 0
+        gross = cash + card
         now = self._now()
         row = self.db.scalars(
             select(BranchCollection).where(
@@ -276,6 +362,9 @@ class CollectionService:
                     branch_office_id=branch_office_id,
                     collection_date=collection_date,
                     gross_amount=gross,
+                    cash_amount=cash,
+                    card_gross=card,
+                    card_tax=card_tax,
                     added_date=now,
                     updated_date=now,
                     deleted_date=None,
@@ -284,6 +373,9 @@ class CollectionService:
             self.db.commit()
         else:
             row.gross_amount = gross
+            row.cash_amount = cash
+            row.card_gross = card
+            row.card_tax = card_tax
             row.updated_date = now
             row.deleted_date = None
             self.db.commit()
@@ -304,15 +396,23 @@ class CollectionService:
             branch_name = branch.branch_office
 
         tickets = deepcopy(tickets_bucket or empty_earnings_bucket())
-        manual_gross = self.get_manual_gross(branch_office_id, collection_date)
+        manual = self.get_manual_breakdown(branch_office_id, collection_date)
         combined = deepcopy(tickets)
-        apply_manual_gross_to_bucket(combined, manual_gross)
+        apply_manual_breakdown_to_bucket(
+            combined,
+            cash_amount=manual["cash_amount"],
+            card_gross=manual["card_gross"],
+            card_tax=manual["card_tax"],
+        )
 
         return CollectionDayResponse(
             branch_office_id=str(branch_office_id),
             branch_name=branch_name,
             collection_date=collection_date,
-            manual_gross_amount=manual_gross,
+            manual_gross_amount=manual["gross_amount"],
+            manual_cash_amount=manual["cash_amount"],
+            manual_card_gross=manual["card_gross"],
+            manual_card_tax=manual["card_tax"],
             tickets_ticket_count=tickets["ticket_count"],
             tickets_subtotal=tickets["subtotal"],
             tickets_iva=tickets["iva"],
@@ -357,20 +457,29 @@ class CollectionService:
         last_day = calendar.monthrange(year, month)[1]
         today = business_today()
 
-        manual_by_day: dict[str, int] = self._manual_gross_by_day_key(branch_office_id)
+        manual_by_day = self._manual_breakdown_by_day_key(branch_office_id)
 
         days: list[CollectionCalendarDay] = []
         for day_num in range(1, last_day + 1):
             day = date(year, month, day_num)
             day_key = day.isoformat()
             tickets = self.tickets_bucket_for_date(tickets_date_buckets, day)
-            manual = manual_by_day.get(day_key, 0)
+            manual = manual_by_day.get(
+                day_key,
+                {"cash_amount": 0, "card_gross": 0, "card_tax": 0, "gross_amount": 0},
+            )
             combined = deepcopy(tickets)
-            apply_manual_gross_to_bucket(combined, manual)
+            apply_manual_breakdown_to_bucket(
+                combined,
+                cash_amount=manual["cash_amount"],
+                card_gross=manual["card_gross"],
+                card_tax=manual["card_tax"],
+            )
+            manual_gross = int(manual["gross_amount"])
 
             if day > today:
                 status = "future"
-            elif self.day_is_recorded(tickets, manual):
+            elif self.day_is_recorded(tickets, manual_gross):
                 status = "ok"
             else:
                 status = "missing"
@@ -380,9 +489,9 @@ class CollectionService:
                     date=day,
                     status=status,
                     has_tickets=tickets["ticket_count"] > 0,
-                    has_manual=manual > 0,
+                    has_manual=manual_gross > 0,
                     tickets_total=tickets["total"],
-                    manual_gross_amount=manual,
+                    manual_gross_amount=manual_gross,
                     total=combined["total"],
                 ),
             )
@@ -432,6 +541,7 @@ class CollectionService:
             )
 
         items: list[CollectionBranchSummaryItem] = []
+        today = business_today()
         for branch in branch_rows:
             if branch.id is None:
                 continue
@@ -440,23 +550,36 @@ class CollectionService:
                 buckets = ticket_service.ticket_earnings_date_buckets(user, branch_id)
             except Exception:
                 continue
-            manual_by_day = self._manual_gross_by_day_key(branch_id)
+            manual_by_day = self._manual_breakdown_by_day_key(branch_id)
 
             subtotal = 0
             iva = 0
             total = 0
             ticket_count = 0
+            missing_dates: list[date] = []
             current = date_from
             while current <= date_to:
                 day_key = current.isoformat()
                 tickets = self.tickets_bucket_for_date(buckets, current)
-                manual = manual_by_day.get(day_key, 0)
+                manual = manual_by_day.get(
+                    day_key,
+                    {"cash_amount": 0, "card_gross": 0, "card_tax": 0, "gross_amount": 0},
+                )
                 combined = deepcopy(tickets)
-                apply_manual_gross_to_bucket(combined, manual)
+                apply_manual_breakdown_to_bucket(
+                    combined,
+                    cash_amount=manual["cash_amount"],
+                    card_gross=manual["card_gross"],
+                    card_tax=manual["card_tax"],
+                )
                 subtotal += combined["subtotal"]
                 iva += combined["iva"]
                 total += combined["total"]
                 ticket_count += combined["ticket_count"]
+                if current <= today and not self.day_is_recorded(
+                    tickets, int(manual["gross_amount"])
+                ):
+                    missing_dates.append(current)
                 current += timedelta(days=1)
 
             items.append(
@@ -468,6 +591,8 @@ class CollectionService:
                     iva=iva,
                     total=total,
                     has_collection=ticket_count > 0 or total > 0,
+                    missing_day_count=len(missing_dates),
+                    missing_dates=missing_dates,
                 ),
             )
 
@@ -479,4 +604,5 @@ class CollectionService:
             iva=sum(row.iva for row in items),
             total=sum(row.total for row in items),
             ticket_count=sum(row.ticket_count for row in items),
+            missing_day_count=sum(row.missing_day_count for row in items),
         )

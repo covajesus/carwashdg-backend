@@ -736,15 +736,15 @@ class WasherPayService:
         effective_pct: Decimal,
     ) -> tuple[int, int, int, int]:
         """Card VAT only, net total (gross − card VAT), commission %, coin-rounded pay."""
-        card_iva = self._card_iva_from_gross(card_gross)
-        total_calculado = max(0, gross_total - card_iva)
+        card_tax = self._card_tax_from_gross(card_gross)
+        total_calculado = max(0, gross_total - card_tax)
         commission_before = round_money(
             Decimal(total_calculado) * effective_pct / Decimal("100"),
         )
         final_amount = self._apply_coin_round(commission_before)
-        return card_iva, total_calculado, commission_before, final_amount
+        return card_tax, total_calculado, commission_before, final_amount
 
-    def _card_iva_from_gross(self, card_gross: int) -> int:
+    def _card_tax_from_gross(self, card_gross: int) -> int:
         """VAT embedded in card gross (not coin-rounded)."""
         if card_gross <= 0:
             return 0
@@ -758,7 +758,7 @@ class WasherPayService:
         effective_pct: Decimal,
         is_group: bool = False,
     ) -> tuple[list[WasherPayBreakdownRow], int]:
-        card_iva, total_calculado, commission_before, final_amount = (
+        card_tax, total_calculado, commission_before, final_amount = (
             self._waterfall_pay_steps(gross_total, card_gross, effective_pct)
         )
         pct_label = self._format_percentage_display(effective_pct)
@@ -771,7 +771,7 @@ class WasherPayService:
         rows: list[WasherPayBreakdownRow] = [
             WasherPayBreakdownRow(label=first_label, amount=gross_total),
             WasherPayBreakdownRow(label="Tarjeta (bruto)", amount=card_gross),
-            WasherPayBreakdownRow(label="− IVA solo tarjeta (19%)", amount=card_iva),
+            WasherPayBreakdownRow(label="− IVA solo tarjeta (19%)", amount=card_tax),
             WasherPayBreakdownRow(label="Total neto (efectivo + tarjeta)", amount=total_calculado),
             WasherPayBreakdownRow(
                 label=commission_label,

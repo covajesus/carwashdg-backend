@@ -15,7 +15,7 @@ from app.schemas.eerr import EerrAccountLine, EerrDetailItem, EerrMonthResponse
 from app.schemas.user import UserPublic
 from app.services.collection_service import (
     CollectionService,
-    apply_manual_gross_to_bucket,
+    apply_manual_breakdown_to_bucket,
     empty_earnings_bucket,
 )
 from app.services.expense_service import ADMIN_ONLY_EXPENSE_TYPES, EXPENSE_TYPE_LABELS, ExpenseService
@@ -107,16 +107,24 @@ class EerrService:
             except TicketValidationError as exc:
                 raise EerrValidationError(str(exc)) from exc
 
-            manual_by_day = self._collections._manual_gross_by_day_key(branch_id)
+            manual_by_day = self._collections._manual_breakdown_by_day_key(branch_id)
             branch_buckets: dict[str, dict[str, int]] = {}
 
             for day_num in range(1, last_day + 1):
                 day = date(year, month, day_num)
                 day_key = day.isoformat()
                 tickets = self._collections.tickets_bucket_for_date(ticket_buckets, day)
-                manual = manual_by_day.get(day_key, 0)
+                manual = manual_by_day.get(
+                    day_key,
+                    {"cash_amount": 0, "card_gross": 0, "card_tax": 0, "gross_amount": 0},
+                )
                 combined = deepcopy(tickets)
-                apply_manual_gross_to_bucket(combined, manual)
+                apply_manual_breakdown_to_bucket(
+                    combined,
+                    cash_amount=manual["cash_amount"],
+                    card_gross=manual["card_gross"],
+                    card_tax=manual["card_tax"],
+                )
                 if combined["subtotal"] <= 0 and combined["total"] <= 0:
                     continue
                 branch_buckets[day_key] = combined
