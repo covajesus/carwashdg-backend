@@ -129,24 +129,28 @@ class ComparisonService:
         return total // 12, total % 12 + 1
 
     @staticmethod
-    def _day_point_amounts(
+    def _day_point(
         buckets: dict[str, dict[str, int]],
         *,
         year: int,
         month: int,
         day_num: int,
         today: date,
-    ) -> tuple[int | None, int | None]:
+    ) -> tuple[int | None, int | None, int | None]:
         last_day = calendar.monthrange(year, month)[1]
         if day_num < 1 or day_num > last_day:
-            return None, None
+            return None, None, None
         day = date(year, month, day_num)
         if day > today:
-            return None, None
+            return None, None, None
         bucket = buckets.get(day.isoformat())
         if not bucket:
-            return 0, 0
-        return int(bucket.get("subtotal", 0)), int(bucket.get("total", 0))
+            return 0, 0, 0
+        return (
+            int(bucket.get("subtotal", 0)),
+            int(bucket.get("total", 0)),
+            int(bucket.get("ticket_count", 0)),
+        )
 
     @staticmethod
     def _month_totals(
@@ -222,14 +226,14 @@ class ComparisonService:
 
         daily: list[ComparisonDailyPoint] = []
         for day_num in range(1, axis_days + 1):
-            cur_net, cur_gross = self._day_point_amounts(
+            cur_net, cur_gross, cur_tickets = self._day_point(
                 buckets,
                 year=year,
                 month=month,
                 day_num=day_num,
                 today=today,
             )
-            prev_net, prev_gross = self._day_point_amounts(
+            prev_net, prev_gross, prev_tickets = self._day_point(
                 buckets,
                 year=prev_month_year,
                 month=prev_month,
@@ -241,8 +245,10 @@ class ComparisonService:
                     day=day_num,
                     current_net=cur_net,
                     current_gross=cur_gross,
+                    current_ticket_count=cur_tickets,
                     previous_net=prev_net,
                     previous_gross=prev_gross,
+                    previous_ticket_count=prev_tickets,
                 ),
             )
 

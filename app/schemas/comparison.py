@@ -5,8 +5,10 @@ class ComparisonDailyPoint(BaseModel):
     day: int = Field(ge=1, le=31)
     current_net: int | None = None
     current_gross: int | None = None
+    current_ticket_count: int | None = None
     previous_net: int | None = None
     previous_gross: int | None = None
+    previous_ticket_count: int | None = None
 
 
 class ComparisonMonthlyPoint(BaseModel):
