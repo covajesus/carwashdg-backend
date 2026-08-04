@@ -25,7 +25,7 @@ class WasherPaySummaryResponse(BaseModel):
     amount: int = Field(ge=0)
 
 
-WasherPayPercentageScope = Literal["day", "group_average"]
+WasherPayPercentageScope = Literal["day", "group_average", "service"]
 
 
 class WasherPayDetailLine(BaseModel):

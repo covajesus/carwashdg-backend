@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -25,11 +26,37 @@ class CatalogService:
         return business_now()
 
     @staticmethod
+    def _normalize_washer_percentage(value: str | None) -> str:
+        text = (value or "").strip().replace("%", "").replace(",", ".")
+        if not text:
+            return "0"
+        try:
+            parsed = Decimal(text)
+        except (InvalidOperation, ValueError) as exc:
+            raise ServiceValidationError(
+                "El porcentaje del lavador debe ser un número válido",
+            ) from exc
+        if parsed < 0 or parsed > 100:
+            raise ServiceValidationError(
+                "El porcentaje del lavador debe estar entre 0 y 100",
+            )
+        normalized = format(parsed, "f")
+        if "." in normalized:
+            normalized = normalized.rstrip("0").rstrip(".")
+        return normalized or "0"
+
+    @staticmethod
+    def _public_washer_percentage(row: Service) -> str:
+        raw = (row.washer_percentage or "").strip()
+        return raw if raw else "0"
+
+    @staticmethod
     def to_public(row: Service) -> ServicePublic:
         return ServicePublic(
             id=str(row.id),
             name=row.service,
             description=(row.description or "").strip(),
+            washerPercentage=CatalogService._public_washer_percentage(row),
             added_date=datetime_to_iso(row.added_date),
             updated_date=datetime_to_iso(row.updated_date),
             deleted_date=datetime_to_iso(row.deleted_date),
@@ -69,6 +96,7 @@ class CatalogService:
         row = Service(
             service=name,
             description=(data.description or "").strip() or None,
+            washer_percentage=self._normalize_washer_percentage(data.washerPercentage),
             added_date=now,
             updated_date=now,
             deleted_date=None,
@@ -93,6 +121,9 @@ class CatalogService:
 
         if data.description is not None:
             row.description = data.description.strip() or None
+
+        if data.washerPercentage is not None:
+            row.washer_percentage = self._normalize_washer_percentage(data.washerPercentage)
 
         row.updated_date = self._now()
         self.db.commit()

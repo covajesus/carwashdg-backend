@@ -216,6 +216,63 @@ class WasherPayService:
         raw = assignment.sunday_percentage if is_sunday else assignment.week_percentage
         return self._parse_percentage(raw)
 
+    def _service_washer_percentage(self, line: TicketBranchOfficeService) -> Decimal:
+        """Configured service override %; 0 means fall back to washer/group day %."""
+        if not line.service_id:
+            return Decimal("0")
+        svc = self.db.get(Service, line.service_id)
+        if svc is None:
+            return Decimal("0")
+        return self._parse_percentage(svc.washer_percentage)
+
+    def _commission_percentage_for_line(
+        self,
+        line: TicketBranchOfficeService,
+        *,
+        day: date,
+        goal_met: bool,
+        assignment=None,
+        group_member_ids: list[int] | None = None,
+    ) -> tuple[Decimal, str, str]:
+        """
+        Resolve commission % for a ticket line.
+
+        If the service has washer_percentage > 0, that value wins (no goal boost).
+        Otherwise use the washer day/Sunday % (+ goal boost) or group average.
+        """
+        service_pct = self._service_washer_percentage(line)
+        if service_pct > 0:
+            return service_pct, "service", "% del servicio"
+        if group_member_ids is not None:
+            avg = self._group_average_effective_pct(
+                member_ids=group_member_ids,
+                day=day,
+                goal_met=goal_met,
+            )
+            return avg, "group_average", "% promedio del grupo"
+        if assignment is None:
+            return Decimal("0"), "day", "% del día"
+        pct = self._effective_percentage(assignment, day=day, goal_met=goal_met)
+        return pct, "day", "% del día"
+
+    def _base_commission_percentage_for_line(
+        self,
+        line: TicketBranchOfficeService,
+        *,
+        day: date,
+        assignment=None,
+        group_member_ids: list[int] | None = None,
+    ) -> Decimal:
+        """Base % without goal boost; service override still applies when set."""
+        service_pct = self._service_washer_percentage(line)
+        if service_pct > 0:
+            return service_pct
+        if group_member_ids is not None:
+            return self._group_base_average_pct(group_member_ids, day=day)
+        if assignment is None:
+            return Decimal("0")
+        return self._percentage_for_date(assignment, day=day)
+
     def _line_service_label(self, line: TicketBranchOfficeService) -> str:
         additional = (line.additional_service or "").strip()
         if additional:
@@ -606,12 +663,13 @@ class WasherPayService:
             if key in seen:
                 continue
             seen.add(key)
-            avg_pct = self._group_average_effective_pct(
-                member_ids=member_ids,
+            pct, _, _ = self._commission_percentage_for_line(
+                line,
                 day=day,
                 goal_met=group_goal_met,
+                group_member_ids=member_ids,
             )
-            commission = self._line_sales_credit(line_net, avg_pct)
+            commission = self._line_sales_credit(line_net, pct)
             efectivo_part, card_part = self._line_pay_payment_split(
                 ticket,
                 line_net,
@@ -628,7 +686,7 @@ class WasherPayService:
         group_id: int,
         day: date,
     ) -> int:
-        """Comisión única del grupo vía bruto → IVA tarjeta → % → redondeo."""
+        """Group commission: waterfall when all lines use washer %, else per-line sum."""
         member_ids = self._washer_groups.member_ids_for_group_on_date(group_id, day=day)
         if not member_ids:
             return 0
@@ -641,17 +699,46 @@ class WasherPayService:
             sales_volume=gross_total,
             goal_amount=self._combined_group_goal_amount(member_ids),
         )
-        avg_pct = self._group_average_effective_pct(
-            member_ids=member_ids,
+        line_entries: list[tuple[TicketBranchOfficeService, int]] = []
+        seen: set[tuple[int, int]] = set()
+        for line, ticket, _line_rows, _line_gross, line_net in self._iter_branch_payable_lines(
+            branch_office_id=branch_office_id,
             day=day,
-            goal_met=group_goal_met,
+        ):
+            if line.washer_daily_group_id != group_id:
+                continue
+            key = (ticket.id or 0, line.id or 0)
+            if key in seen:
+                continue
+            seen.add(key)
+            line_entries.append((line, line_net))
+
+        has_service_override = any(
+            self._service_washer_percentage(line) > 0 for line, _net in line_entries
         )
-        *_, _, _, final_amount = self._waterfall_pay_steps(
-            gross_total,
-            card_gross,
-            avg_pct,
-        )
-        return final_amount
+        if not has_service_override:
+            avg_pct = self._group_average_effective_pct(
+                member_ids=member_ids,
+                day=day,
+                goal_met=group_goal_met,
+            )
+            *_, _, _, final_amount = self._waterfall_pay_steps(
+                gross_total,
+                card_gross,
+                avg_pct,
+            )
+            return final_amount
+
+        total = 0
+        for line, line_net in line_entries:
+            pct, _, _ = self._commission_percentage_for_line(
+                line,
+                day=day,
+                goal_met=group_goal_met,
+                group_member_ids=member_ids,
+            )
+            total += self._line_sales_credit(line_net, pct)
+        return self._apply_coin_round(total)
 
     @staticmethod
     def _reconcile_pay_split_to_target(
@@ -992,8 +1079,12 @@ class WasherPayService:
             if group_id is not None and group_id > 0:
                 member_ids = self._group_member_ids_for_pay_day(group_id, day=day)
                 if member_ids:
-                    base_avg = self._group_base_average_pct(member_ids, day=day)
-                    credit = self._line_sales_credit(line_net, base_avg)
+                    base_pct = self._base_commission_percentage_for_line(
+                        line,
+                        day=day,
+                        group_member_ids=member_ids,
+                    )
+                    credit = self._line_sales_credit(line_net, base_pct)
                     for member_id in member_ids:
                         sales[member_id] += credit
                     continue
@@ -1001,7 +1092,11 @@ class WasherPayService:
             if line_washer_id is not None:
                 assignment = self._branch_washer.get_active_assignment_for_washer(line_washer_id)
                 if assignment is not None:
-                    pct = self._percentage_for_date(assignment, day=day)
+                    pct = self._base_commission_percentage_for_line(
+                        line,
+                        day=day,
+                        assignment=assignment,
+                    )
                     sales[line_washer_id] += self._line_sales_credit(line_net, pct)
         return dict(sales)
 
@@ -1196,7 +1291,6 @@ class WasherPayService:
             goal_met=solo_goal_met,
         )
         effective_pct = base_pct + boost_pct
-        effective_pct_display = self._format_percentage_display(effective_pct)
 
         detail_lines: list[WasherPayDetailLine] = []
         for ctx in line_contexts:
@@ -1208,7 +1302,13 @@ class WasherPayService:
                 description_parts.append(plate)
             description_parts.append(service_label)
 
-            sales_credit = self._line_sales_credit(ctx.full_line_net, effective_pct)
+            line_pct, pct_scope, pct_label = self._commission_percentage_for_line(
+                ctx.line,
+                day=day,
+                goal_met=solo_goal_met,
+                assignment=assignment,
+            )
+            sales_credit = self._line_sales_credit(ctx.full_line_net, line_pct)
             detail_lines.append(
                 WasherPayDetailLine(
                     kind="ticket",
@@ -1218,10 +1318,14 @@ class WasherPayService:
                     base_amount=sales_credit,
                     line_gross_net=ctx.full_line_net,
                     group_member_count=None,
-                    percentage=effective_pct_display,
-                    percentage_scope="day",
-                    percentage_label="% del día",
-                    day_percentage=None,
+                    percentage=self._format_percentage_display(line_pct),
+                    percentage_scope=pct_scope,  # type: ignore[arg-type]
+                    percentage_label=pct_label,
+                    day_percentage=(
+                        self._format_percentage_display(effective_pct)
+                        if pct_scope == "service"
+                        else None
+                    ),
                     amount=sales_credit,
                 ),
             )
@@ -1242,13 +1346,14 @@ class WasherPayService:
             if ctx.group_id is None:
                 continue
             member_ids = self._group_member_ids_for_pay_day(ctx.group_id, day=day)
-            avg_pct = self._group_average_effective_pct(
-                member_ids=member_ids,
+            line_pct, pct_scope, pct_label = self._commission_percentage_for_line(
+                ctx.line,
                 day=day,
                 goal_met=goal_met,
+                group_member_ids=member_ids,
             )
-            pct_display = self._format_percentage_display(avg_pct)
-            sales_credit = self._line_sales_credit(ctx.full_line_net, avg_pct)
+            pct_display = self._format_percentage_display(line_pct)
+            sales_credit = self._line_sales_credit(ctx.full_line_net, line_pct)
             ticket_id = str(ctx.ticket.id) if ctx.ticket.id is not None else None
             plate = (ctx.ticket.license_plate_id or "").strip()
             service_label = self._line_service_label(ctx.line)
@@ -1269,8 +1374,8 @@ class WasherPayService:
                     line_gross_net=ctx.full_line_net,
                     group_member_count=ctx.group_member_count,
                     percentage=pct_display,
-                    percentage_scope="group_average",
-                    percentage_label="% promedio del grupo",
+                    percentage_scope=pct_scope,  # type: ignore[arg-type]
+                    percentage_label=pct_label,
                     day_percentage=None,
                     amount=sales_credit,
                 ),
@@ -1602,20 +1707,34 @@ class WasherPayService:
                 if key in seen_group_lines:
                     continue
                 seen_group_lines.add(key)
-                base_avg = self._group_base_average_pct(member_ids, day=day)
-                avg_pct = self._group_average_effective_pct(
-                    member_ids=member_ids,
+                base_pct_line = self._base_commission_percentage_for_line(
+                    line,
+                    day=day,
+                    group_member_ids=member_ids,
+                )
+                avg_pct_line, _, _ = self._commission_percentage_for_line(
+                    line,
                     day=day,
                     goal_met=group_goal_met,
+                    group_member_ids=member_ids,
                 )
-                base_commission += self._line_sales_credit(line_net, base_avg)
-                boosted_commission += self._line_sales_credit(line_net, avg_pct)
+                base_commission += self._line_sales_credit(line_net, base_pct_line)
+                boosted_commission += self._line_sales_credit(line_net, avg_pct_line)
         else:
             for ctx in line_contexts:
-                base_part = self._line_sales_credit(ctx.full_line_net, base_pct)
-                boosted_part = self._line_sales_credit(ctx.full_line_net, effective_pct)
-                base_commission += base_part
-                boosted_commission += boosted_part
+                base_pct_line = self._base_commission_percentage_for_line(
+                    ctx.line,
+                    day=day,
+                    assignment=assignment,
+                )
+                avg_pct_line, _, _ = self._commission_percentage_for_line(
+                    ctx.line,
+                    day=day,
+                    goal_met=effective_solo_goal_met,
+                    assignment=assignment,
+                )
+                base_commission += self._line_sales_credit(ctx.full_line_net, base_pct_line)
+                boosted_commission += self._line_sales_credit(ctx.full_line_net, avg_pct_line)
         goal_bonus = (
             max(0, boosted_commission - base_commission)
             if goal_met and boosted_commission > base_commission
@@ -1662,20 +1781,60 @@ class WasherPayService:
                 goal_met=group_goal_met,
             )
             is_group_breakdown = True
+            has_service_override = any(
+                self._service_washer_percentage(ctx.line) > 0 for ctx in line_contexts
+            )
         else:
             _ef_gross, card_gross, gross_total = self._washer_sales_gross_by_payment(
                 line_contexts,
             )
             breakdown_pct = effective_pct
             is_group_breakdown = False
+            has_service_override = any(
+                self._service_washer_percentage(ctx.line) > 0 for ctx in line_contexts
+            )
 
-        pay_breakdown, breakdown_amount = self._build_pay_breakdown(
-            gross_total=gross_total,
-            card_gross=card_gross,
-            effective_pct=breakdown_pct,
-            is_group=is_group_breakdown,
-        )
+        if has_service_override:
+            line_total = self._apply_coin_round(sum(line.amount for line in ticket_lines))
+            pay_breakdown = [
+                WasherPayBreakdownRow(
+                    label="Total cobrado (bruto)" if not is_group_breakdown else "Total del Grupo",
+                    amount=gross_total,
+                ),
+                WasherPayBreakdownRow(label="Tarjeta (bruto)", amount=card_gross),
+                WasherPayBreakdownRow(
+                    label="Comisión (por servicio / % del lavador)",
+                    amount=line_total,
+                ),
+                WasherPayBreakdownRow(
+                    label="Total a pagar por el grupo" if is_group_breakdown else "Total a pagar",
+                    amount=line_total,
+                    emphasis=True,
+                ),
+            ]
+            breakdown_amount = line_total
+        else:
+            pay_breakdown, breakdown_amount = self._build_pay_breakdown(
+                gross_total=gross_total,
+                card_gross=card_gross,
+                effective_pct=breakdown_pct,
+                is_group=is_group_breakdown,
+            )
         amount = breakdown_amount
+
+        if has_service_override and any(
+            line.percentage_scope == "service" for line in ticket_lines
+        ):
+            applied_label = "Porcentaje por servicio (y del lavador si aplica)"
+            service_pcts = [
+                (line.percentage or "").strip()
+                for line in ticket_lines
+                if line.percentage_scope == "service" and (line.percentage or "").strip()
+            ]
+            if len(set(service_pcts)) == 1:
+                applied_raw = service_pcts[0]
+            elif service_pcts:
+                applied_raw = "varios"
 
         if group_id is not None and group_id > 0:
             pay_efectivo, pay_card, pay_total = self._group_pay_by_payment(
