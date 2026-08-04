@@ -303,12 +303,60 @@ class WasherDailyGroupService:
             if row.id is not None and active_from_status_id(row.status_id)
         ]
 
+    def _solo_washer_ids_with_tickets_on_day(
+        self,
+        branch_office_id: int,
+        day: date,
+    ) -> list[int]:
+        """Solo washers assigned on tickets whose revenue day matches `day` for the branch."""
+        from app.models.ticket import Ticket
+        from app.models.ticket_branch_office_service import TicketBranchOfficeService
+        from app.services.ticket_service import TicketService
+
+        ticket_svc = TicketService(self.db)
+        ticket_ids_q = ticket_svc._ticket_ids_for_branch_subquery(branch_office_id)
+        lines = self.db.scalars(
+            select(TicketBranchOfficeService).where(
+                TicketBranchOfficeService.ticket_id.in_(ticket_ids_q),
+                TicketBranchOfficeService.deleted_date.is_(None),
+                TicketBranchOfficeService.washer_id.isnot(None),
+                TicketBranchOfficeService.washer_daily_group_id.is_(None),
+            ),
+        ).all()
+        ticket_ids = {line.ticket_id for line in lines if line.ticket_id is not None}
+        if not ticket_ids:
+            return []
+        tickets_by_id = {
+            row.id: row
+            for row in self.db.scalars(
+                select(Ticket).where(
+                    Ticket.id.in_(ticket_ids),
+                    Ticket.deleted_date.is_(None),
+                ),
+            ).all()
+            if row.id is not None
+        }
+        found: set[int] = set()
+        for line in lines:
+            if line.washer_id is None or line.ticket_id is None:
+                continue
+            ticket = tickets_by_id.get(line.ticket_id)
+            if ticket is None:
+                continue
+            if ticket_svc.ticket_revenue_day(ticket) == day:
+                found.add(line.washer_id)
+        return sorted(
+            found,
+            key=lambda washer_id: (self._washer_full_name(washer_id).lower(), washer_id),
+        )
+
     def ticket_washer_options(
         self,
         user: UserPublic,
         *,
         branch_office_id: int,
         group_date: date | None = None,
+        purpose: str = "assign",
     ) -> TicketWasherOptionsResponse:
         day = group_date or self._today()
         self._ensure_branch_access(user, branch_office_id)
@@ -316,18 +364,27 @@ class WasherDailyGroupService:
             self._active_groups_query(branch_office_id=branch_office_id, group_date=day)
             .order_by(WasherDailyGroup.name.asc(), WasherDailyGroup.id.asc()),
         ).all()
-        grouped_ids = self._washer_ids_in_groups(
-            branch_office_id=branch_office_id,
-            group_date=day,
-        )
-        active_washer_ids = self._active_washer_ids_for_branch(branch_office_id)
+        mode = (purpose or "assign").strip().lower()
+        if mode == "filter":
+            # Filter dropdown: day's groups + solo washers with tickets that day.
+            washer_ids = self._solo_washer_ids_with_tickets_on_day(branch_office_id, day)
+        else:
+            # Create/edit ticket: available ungrouped washers for the branch that day.
+            grouped_ids = self._washer_ids_in_groups(
+                branch_office_id=branch_office_id,
+                group_date=day,
+            )
+            washer_ids = [
+                washer_id
+                for washer_id in self._active_washer_ids_for_branch(branch_office_id)
+                if washer_id not in grouped_ids
+            ]
         washers = [
             TicketWasherOptionWasher(
                 id=str(washer_id),
                 full_name=self._washer_full_name(washer_id),
             )
-            for washer_id in active_washer_ids
-            if washer_id not in grouped_ids
+            for washer_id in washer_ids
         ]
         group_items = [
             TicketWasherOptionGroup(

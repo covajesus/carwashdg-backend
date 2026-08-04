@@ -46,12 +46,17 @@ def ticket_washer_options(
     user: CurrentUserDep,
     service: WasherDailyGroupServiceDep,
     group_date: date | None = Query(default=None, alias="date"),
+    purpose: str = Query(
+        default="assign",
+        description="assign = available washers for create/edit; filter = washers/groups of that day",
+    ),
 ) -> TicketWasherOptionsResponse:
     try:
         return service.ticket_washer_options(
             user,
             branch_office_id=branch_office_id,
             group_date=group_date,
+            purpose=purpose,
         )
     except WasherDailyGroupValidationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
