@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import calendar
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
-from app.core.datetime_utils import business_now
+from app.core.datetime_utils import business_now, business_today
 from decimal import Decimal
 
 from sqlalchemy import and_, or_, select
@@ -32,6 +33,9 @@ from app.schemas.washer_pay import (
     WasherPayGroupMemberItem,
     WasherPayManualGoalMetResponse,
     WasherPayManualGoalMetUpdate,
+    WasherPayMonthDayItem,
+    WasherPayMonthResponse,
+    WasherPayMonthWorkerItem,
     WasherPayPaymentStatus,
     WasherPayStatusResponse,
     WasherPaySummaryItem,
@@ -1724,6 +1728,218 @@ class WasherPayService:
             date=day.isoformat(),
             items=items,
             amount=sum(row.amount for row in items),
+        )
+
+    @staticmethod
+    def _split_amount_among(amount: int, member_ids: list[int]) -> dict[int, int]:
+        ids = sorted({member_id for member_id in member_ids if member_id > 0})
+        count = len(ids)
+        if amount <= 0 or count == 0:
+            return {}
+        if count == 1:
+            return {ids[0]: amount}
+        per = round_money(Decimal(amount) / Decimal(count))
+        shares: dict[int, int] = {}
+        assigned = 0
+        for index, member_id in enumerate(ids):
+            if index == count - 1:
+                shares[member_id] = max(0, amount - assigned)
+            else:
+                shares[member_id] = per
+                assigned += per
+        return shares
+
+    def _resolve_month_report_branches(
+        self,
+        user: UserPublic,
+        branch_office_id: int | None,
+    ) -> list[BranchOffice]:
+        scope = TicketService._branch_scope_for_user(user)
+        if scope == 0:
+            raise WasherPayValidationError("No tiene permiso para consultar pagos")
+        if scope is not None:
+            return [self._ensure_branch_access(user, scope)]
+        if branch_office_id is not None and branch_office_id >= 1:
+            return [self._ensure_branch_access(user, branch_office_id)]
+        branches = self.db.scalars(
+            select(BranchOffice)
+            .where(BranchOffice.deleted_date.is_(None))
+            .order_by(BranchOffice.branch_office.asc(), BranchOffice.id.asc()),
+        ).all()
+        return [branch for branch in branches if branch.is_active and branch.id is not None]
+
+    def month_report(
+        self,
+        user: UserPublic,
+        *,
+        year: int,
+        month: int,
+        branch_office_id: int | None = None,
+        washer_id: int | None = None,
+    ) -> WasherPayMonthResponse:
+        if month < 1 or month > 12:
+            raise WasherPayValidationError("Mes no válido")
+        if year < 2000 or year > 2100:
+            raise WasherPayValidationError("Año no válido")
+        if washer_id is not None and washer_id < 1:
+            raise WasherPayValidationError("Lavador no válido")
+
+        branches = self._resolve_month_report_branches(user, branch_office_id)
+        last_day = calendar.monthrange(year, month)[1]
+        today = business_today()
+        range_start = date(year, month, 1)
+        range_end = min(date(year, month, last_day), today)
+
+        filter_washer_id = washer_id if washer_id is not None and washer_id >= 1 else None
+        single_branch = branches[0] if len(branches) == 1 else None
+
+        if range_end >= range_start:
+            for branch in branches:
+                if branch.id is None:
+                    continue
+                self.prefetch_payable_lines_for_range(
+                    branch_office_id=int(branch.id),
+                    start_day=range_start,
+                    end_day=range_end,
+                )
+
+        totals: dict[tuple[int, int], dict[str, object]] = {}
+        day_rows: dict[tuple[int, int], list[WasherPayMonthDayItem]] = defaultdict(list)
+
+        if range_end >= range_start:
+            for branch in branches:
+                if branch.id is None:
+                    continue
+                branch_id = int(branch.id)
+                branch_name = (branch.branch_office or "").strip() or f"Sucursal {branch_id}"
+                for day_num in range(1, last_day + 1):
+                    day = date(year, month, day_num)
+                    if day > today:
+                        break
+                    try:
+                        summary = self.summary_by_branch_and_date(
+                            user,
+                            branch_office_id=branch_id,
+                            date_value=day.isoformat(),
+                        )
+                    except WasherPayValidationError:
+                        continue
+
+                    day_shares: dict[int, dict[str, int]] = defaultdict(
+                        lambda: {"amount": 0, "tickets": 0, "paid": 0, "unpaid": 0},
+                    )
+
+                    def _add_day_share(
+                        worker_id: int,
+                        share_amount: int,
+                        tickets: int,
+                        payment_status: WasherPayPaymentStatus,
+                    ) -> None:
+                        if filter_washer_id is not None and worker_id != filter_washer_id:
+                            return
+                        day_shares[worker_id]["amount"] += share_amount
+                        day_shares[worker_id]["tickets"] += tickets
+                        if payment_status == "paid":
+                            day_shares[worker_id]["paid"] += share_amount
+                        else:
+                            day_shares[worker_id]["unpaid"] += share_amount
+
+                    for item in summary.items:
+                        if item.kind == "group":
+                            member_ids = [
+                                int(member_id)
+                                for member_id in item.member_washer_ids
+                                if str(member_id).isdigit() and int(member_id) > 0
+                            ]
+                            shares = self._split_amount_among(item.amount, member_ids)
+                            for member_id, share in shares.items():
+                                _add_day_share(
+                                    member_id,
+                                    share,
+                                    item.ticket_count,
+                                    item.payment_status,
+                                )
+                            continue
+                        if not item.washer_id or not str(item.washer_id).isdigit():
+                            continue
+                        solo_id = int(item.washer_id)
+                        if solo_id < 1:
+                            continue
+                        _add_day_share(
+                            solo_id,
+                            item.amount,
+                            item.ticket_count,
+                            item.payment_status,
+                        )
+
+                    for worker_id, share in day_shares.items():
+                        amount = int(share["amount"])
+                        tickets = int(share["tickets"])
+                        paid_amount = int(share["paid"])
+                        unpaid_amount = int(share["unpaid"])
+                        if amount <= 0 and tickets <= 0:
+                            continue
+                        status: WasherPayPaymentStatus = (
+                            "paid" if unpaid_amount <= 0 and amount > 0 else "unpaid"
+                        )
+                        key = (worker_id, branch_id)
+                        row = totals.get(key)
+                        if row is None:
+                            row = {
+                                "full_name": self._washer_full_name(worker_id),
+                                "branch_name": branch_name,
+                                "amount": 0,
+                                "paid_amount": 0,
+                                "unpaid_amount": 0,
+                                "ticket_count": 0,
+                            }
+                            totals[key] = row
+                        row["amount"] = int(row["amount"]) + amount
+                        row["ticket_count"] = int(row["ticket_count"]) + tickets
+                        row["paid_amount"] = int(row["paid_amount"]) + paid_amount
+                        row["unpaid_amount"] = int(row["unpaid_amount"]) + unpaid_amount
+                        day_rows[key].append(
+                            WasherPayMonthDayItem(
+                                date=day.isoformat(),
+                                amount=amount,
+                                ticket_count=tickets,
+                                payment_status=status,
+                            ),
+                        )
+
+        items: list[WasherPayMonthWorkerItem] = []
+        for (worker_id, branch_id), row in totals.items():
+            days = sorted(day_rows.get((worker_id, branch_id), []), key=lambda d: d.date)
+            items.append(
+                WasherPayMonthWorkerItem(
+                    washer_id=str(worker_id),
+                    full_name=str(row["full_name"]),
+                    branch_office_id=str(branch_id),
+                    branch_name=str(row["branch_name"]),
+                    amount=int(row["amount"]),
+                    paid_amount=int(row["paid_amount"]),
+                    unpaid_amount=int(row["unpaid_amount"]),
+                    ticket_count=int(row["ticket_count"]),
+                    days_worked=len(days),
+                    days=days,
+                ),
+            )
+        items.sort(key=lambda row: (row.full_name.lower(), row.branch_name.lower(), row.washer_id))
+
+        return WasherPayMonthResponse(
+            year=year,
+            month=month,
+            branch_office_id=str(single_branch.id) if single_branch and single_branch.id else "0",
+            branch_name=(
+                (single_branch.branch_office or "").strip() or f"Sucursal {single_branch.id}"
+                if single_branch
+                else "Todas las sucursales"
+            ),
+            washer_id=str(filter_washer_id) if filter_washer_id is not None else None,
+            items=items,
+            amount=sum(row.amount for row in items),
+            paid_amount=sum(row.paid_amount for row in items),
+            unpaid_amount=sum(row.unpaid_amount for row in items),
         )
 
     def detail_for_washer(

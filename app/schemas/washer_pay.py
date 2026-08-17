@@ -126,3 +126,35 @@ class WasherPayManualGoalMetResponse(BaseModel):
     branch_office_id: str
     date: str
     manual_goal_met: bool
+
+
+class WasherPayMonthDayItem(BaseModel):
+    date: str
+    amount: int = Field(ge=0)
+    ticket_count: int = Field(ge=0)
+    payment_status: WasherPayPaymentStatus = "unpaid"
+
+
+class WasherPayMonthWorkerItem(BaseModel):
+    washer_id: str
+    full_name: str
+    branch_office_id: str
+    branch_name: str
+    amount: int = Field(ge=0)
+    paid_amount: int = Field(ge=0)
+    unpaid_amount: int = Field(ge=0)
+    ticket_count: int = Field(ge=0)
+    days_worked: int = Field(ge=0)
+    days: list[WasherPayMonthDayItem] = Field(default_factory=list)
+
+
+class WasherPayMonthResponse(BaseModel):
+    year: int
+    month: int = Field(ge=1, le=12)
+    branch_office_id: str
+    branch_name: str
+    washer_id: str | None = None
+    items: list[WasherPayMonthWorkerItem] = Field(default_factory=list)
+    amount: int = Field(ge=0)
+    paid_amount: int = Field(ge=0)
+    unpaid_amount: int = Field(ge=0)
