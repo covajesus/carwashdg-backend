@@ -262,6 +262,7 @@ class TicketService:
         branch_office_id: int,
         *,
         revenue_day: date | None = None,
+        revenue_range: tuple[date, date] | None = None,
     ) -> list[Ticket]:
         stmt = self._active_filter(select(Ticket)).where(
             Ticket.id.in_(self._ticket_ids_for_branch_subquery(branch_office_id)),
@@ -277,6 +278,24 @@ class TicketService:
                 Ticket.updated_date.isnot(None),
                 Ticket.updated_date >= day_start,
                 Ticket.updated_date <= day_end,
+            )
+        elif revenue_range is not None:
+            range_start, range_end = revenue_range
+            window_start = datetime.combine(range_start, time.min)
+            window_end = datetime.combine(range_end, time(23, 59, 59, 999999))
+            stmt = stmt.where(
+                or_(
+                    and_(
+                        Ticket.updated_date.isnot(None),
+                        Ticket.updated_date >= window_start,
+                        Ticket.updated_date <= window_end,
+                    ),
+                    and_(
+                        Ticket.added_date.isnot(None),
+                        Ticket.added_date >= window_start,
+                        Ticket.added_date <= window_end,
+                    ),
+                ),
             )
 
         rows = list(self.db.scalars(stmt).all())
@@ -816,6 +835,7 @@ class TicketService:
         branch_office_id: int,
         *,
         revenue_day: date | None = None,
+        revenue_range: tuple[date, date] | None = None,
     ) -> dict[str, dict[str, int]]:
         scope = self._branch_scope_for_user(user)
         if scope == 0:
@@ -834,6 +854,7 @@ class TicketService:
         for row in self._branch_collected_tickets(
             branch_office_id,
             revenue_day=revenue_day,
+            revenue_range=revenue_range,
         ):
             ticket_revenue_day = self.ticket_revenue_day(row)
             day_key = (

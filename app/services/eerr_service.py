@@ -96,6 +96,7 @@ class EerrService:
             stmt = stmt.where(BranchOffice.id == branch_office_id)
         branches = self.db.scalars(stmt).all()
         last_day = calendar.monthrange(year, month)[1]
+        month_range = (date(year, month, 1), date(year, month, last_day))
         by_branch: dict[int, dict[str, dict[str, int]]] = {}
 
         for branch in branches:
@@ -103,7 +104,11 @@ class EerrService:
                 continue
             branch_id = int(branch.id)
             try:
-                ticket_buckets = self._tickets.ticket_earnings_date_buckets(user, branch_id)
+                ticket_buckets = self._tickets.ticket_earnings_date_buckets(
+                    user,
+                    branch_id,
+                    revenue_range=month_range,
+                )
             except TicketValidationError as exc:
                 raise EerrValidationError(str(exc)) from exc
 
@@ -235,6 +240,14 @@ class EerrService:
 
         washer_pay_total = 0
         washer_items: list[EerrDetailItem] = []
+        washer_range_end = min(date(year, month, last_day), today)
+        if washer_range_end >= date(year, month, 1):
+            for branch_id in branch_ids:
+                self._washer_pay.prefetch_payable_lines_for_range(
+                    branch_office_id=branch_id,
+                    start_day=date(year, month, 1),
+                    end_day=washer_range_end,
+                )
         for day_num in range(1, last_day + 1):
             day = date(year, month, day_num)
             if day > today:

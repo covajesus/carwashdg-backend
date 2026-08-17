@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, time, timedelta
 
 from app.core.datetime_utils import business_now
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.pricing import (
@@ -76,6 +76,23 @@ class WasherPayService:
                 int,
             ]],
         ] = {}
+        self._assignment_cache: dict[int, object | None] = {}
+        self._branch_washer_ids_cache: dict[int, list[int]] = {}
+
+    def _assignment_for_washer(self, washer_id: int):
+        """Cached branch assignment lookup (read-only reporting path)."""
+        if washer_id in self._assignment_cache:
+            return self._assignment_cache[washer_id]
+        assignment = self._branch_washer.get_active_assignment_for_washer(washer_id)
+        self._assignment_cache[washer_id] = assignment
+        return assignment
+
+    def _branch_washer_ids(self, branch_office_id: int) -> list[int]:
+        cached = self._branch_washer_ids_cache.get(branch_office_id)
+        if cached is None:
+            cached = self._branch_washer.list_washer_ids_for_branch(branch_office_id)
+            self._branch_washer_ids_cache[branch_office_id] = cached
+        return cached
 
     def _coin_round_enabled(self) -> bool:
         row = self.db.get(Configuration, 1)
@@ -142,7 +159,7 @@ class WasherPayService:
     def _combined_group_goal_amount(self, member_ids: list[int]) -> int:
         total = 0
         for member_id in member_ids:
-            assignment = self._branch_washer.get_active_assignment_for_washer(member_id)
+            assignment = self._assignment_for_washer(member_id)
             if assignment is not None:
                 total += self._member_goal_amount(assignment)
         return total
@@ -977,6 +994,153 @@ class WasherPayService:
     def _group_member_ids_for_pay_day(self, group_id: int, *, day: date) -> list[int]:
         return self._washer_groups.member_ids_for_group_on_date(group_id, day=day)
 
+    def _lines_by_ticket_id(
+        self,
+        ticket_ids: list[int],
+    ) -> dict[int, list[TicketBranchOfficeService]]:
+        """Ticket lines for many tickets in batched queries (avoids one query per ticket)."""
+        grouped: dict[int, list[TicketBranchOfficeService]] = defaultdict(list)
+        chunk_size = 500
+        for start in range(0, len(ticket_ids), chunk_size):
+            chunk = ticket_ids[start:start + chunk_size]
+            if not chunk:
+                continue
+            rows = self.db.scalars(
+                select(TicketBranchOfficeService)
+                .where(
+                    TicketBranchOfficeService.ticket_id.in_(chunk),
+                    TicketBranchOfficeService.deleted_date.is_(None),
+                )
+                .order_by(TicketBranchOfficeService.id.asc()),
+            ).all()
+            for row in rows:
+                if row.ticket_id is not None:
+                    grouped[int(row.ticket_id)].append(row)
+        return grouped
+
+    def _payable_entries_by_day(
+        self,
+        *,
+        branch_office_id: int,
+        start_day: date,
+        end_day: date,
+    ) -> dict[
+        date,
+        list[
+            tuple[
+                TicketBranchOfficeService,
+                Ticket,
+                list[TicketBranchOfficeService],
+                int,
+                int,
+            ]
+        ],
+    ]:
+        """Payable lines grouped by revenue day, filtering candidate tickets in SQL."""
+        window_start = datetime.combine(start_day, time.min)
+        window_end = datetime.combine(end_day, time.max)
+        branch_ticket_ids = self._tickets._ticket_ids_for_branch_subquery(branch_office_id)
+        ticket_rows = self.db.scalars(
+            select(Ticket)
+            .where(
+                Ticket.deleted_date.is_(None),
+                Ticket.id.in_(branch_ticket_ids),
+                or_(
+                    and_(
+                        Ticket.updated_date.isnot(None),
+                        Ticket.updated_date >= window_start,
+                        Ticket.updated_date <= window_end,
+                    ),
+                    and_(
+                        Ticket.added_date.isnot(None),
+                        Ticket.added_date >= window_start,
+                        Ticket.added_date <= window_end,
+                    ),
+                ),
+            )
+            .order_by(Ticket.id.asc()),
+        ).all()
+
+        # Branch membership is already enforced by the ticket-id subquery above, so no
+        # per-ticket re-check is needed here.
+        candidates: list[tuple[Ticket, date]] = []
+        for ticket in ticket_rows:
+            if ticket.id is None:
+                continue
+            if not self._tickets.ticket_eligible_for_washer_pay(ticket):
+                continue
+            revenue_day = self._tickets.ticket_revenue_day(ticket)
+            if revenue_day is None or revenue_day < start_day or revenue_day > end_day:
+                continue
+            candidates.append((ticket, revenue_day))
+
+        lines_by_ticket = self._lines_by_ticket_id(
+            [int(ticket.id) for ticket, _day in candidates if ticket.id is not None],
+        )
+
+        by_day: dict[
+            date,
+            list[
+                tuple[
+                    TicketBranchOfficeService,
+                    Ticket,
+                    list[TicketBranchOfficeService],
+                    int,
+                    int,
+                ]
+            ],
+        ] = {}
+        cursor = start_day
+        while cursor <= end_day:
+            by_day[cursor] = []
+            cursor += timedelta(days=1)
+
+        for ticket, revenue_day in candidates:
+            line_rows = lines_by_ticket.get(int(ticket.id or 0), [])
+            if not line_rows:
+                continue
+            gross_by_line = self._line_gross_amounts_for_ticket(ticket, line_rows)
+            for line in line_rows:
+                if not self._is_payable_service_line(line):
+                    continue
+                gross = gross_by_line.get(line.id or 0, 0)
+                if gross <= 0:
+                    continue
+                line_net = self._gross_to_net(gross, ticket=ticket)
+                if line_net <= 0:
+                    continue
+                by_day[revenue_day].append((line, ticket, line_rows, gross, line_net))
+
+        return by_day
+
+    def prefetch_payable_lines_for_range(
+        self,
+        *,
+        branch_office_id: int,
+        start_day: date,
+        end_day: date,
+    ) -> None:
+        """Warm the per-day cache for a whole range with a single ticket query."""
+        if end_day < start_day:
+            return
+        pending = False
+        cursor = start_day
+        while cursor <= end_day:
+            if (branch_office_id, cursor) not in self._payable_line_entries_cache:
+                pending = True
+                break
+            cursor += timedelta(days=1)
+        if not pending:
+            return
+
+        by_day = self._payable_entries_by_day(
+            branch_office_id=branch_office_id,
+            start_day=start_day,
+            end_day=end_day,
+        )
+        for day, entries in by_day.items():
+            self._payable_line_entries_cache[(branch_office_id, day)] = entries
+
     def _branch_payable_line_entries(
         self,
         *,
@@ -996,58 +1160,12 @@ class WasherPayService:
         if cached is not None:
             return cached
 
-        branch_ticket_ids = self._tickets._ticket_ids_for_branch_subquery(branch_office_id)
-        ticket_rows = self.db.scalars(
-            select(Ticket)
-            .where(
-                Ticket.deleted_date.is_(None),
-                Ticket.id.in_(branch_ticket_ids),
-            )
-            .order_by(Ticket.id.asc()),
-        ).all()
-
-        entries: list[
-            tuple[
-                TicketBranchOfficeService,
-                Ticket,
-                list[TicketBranchOfficeService],
-                int,
-                int,
-            ]
-        ] = []
-        for ticket in ticket_rows:
-            if ticket.id is None:
-                continue
-            if not self._tickets.ticket_eligible_for_washer_pay(ticket):
-                continue
-            if self._tickets.ticket_revenue_day(ticket) != day:
-                continue
-            if not self._tickets._ticket_matches_branch(ticket.id, branch_office_id):
-                continue
-
-            line_rows = self.db.scalars(
-                select(TicketBranchOfficeService)
-                .where(
-                    TicketBranchOfficeService.ticket_id == ticket.id,
-                    TicketBranchOfficeService.deleted_date.is_(None),
-                )
-                .order_by(TicketBranchOfficeService.id.asc()),
-            ).all()
-            if not line_rows:
-                continue
-
-            gross_by_line = self._line_gross_amounts_for_ticket(ticket, line_rows)
-            for line in line_rows:
-                if not self._is_payable_service_line(line):
-                    continue
-                gross = gross_by_line.get(line.id or 0, 0)
-                if gross <= 0:
-                    continue
-                line_net = self._gross_to_net(gross, ticket=ticket)
-                if line_net <= 0:
-                    continue
-                entries.append((line, ticket, line_rows, gross, line_net))
-
+        by_day = self._payable_entries_by_day(
+            branch_office_id=branch_office_id,
+            start_day=day,
+            end_day=day,
+        )
+        entries = by_day.get(day, [])
         self._payable_line_entries_cache[cache_key] = entries
         return entries
 
@@ -1090,7 +1208,7 @@ class WasherPayService:
                     continue
             line_washer_id = self._line_attributed_washer_id(line, line_rows)
             if line_washer_id is not None:
-                assignment = self._branch_washer.get_active_assignment_for_washer(line_washer_id)
+                assignment = self._assignment_for_washer(line_washer_id)
                 if assignment is not None:
                     pct = self._base_commission_percentage_for_line(
                         line,
@@ -1114,7 +1232,7 @@ class WasherPayService:
         total = Decimal("0")
         count = 0
         for member_id in member_ids:
-            assignment = self._branch_washer.get_active_assignment_for_washer(member_id)
+            assignment = self._assignment_for_washer(member_id)
             if assignment is None:
                 continue
             total += self._percentage_for_date(assignment, day=day)
@@ -1134,7 +1252,7 @@ class WasherPayService:
             return Decimal("0")
         total = Decimal("0")
         for member_id in member_ids:
-            assignment = self._branch_washer.get_active_assignment_for_washer(member_id)
+            assignment = self._assignment_for_washer(member_id)
             if assignment is None:
                 continue
             total += self._effective_percentage(
@@ -1152,7 +1270,7 @@ class WasherPayService:
         day: date,
     ) -> list[_WasherPayLineContext]:
         """Tickets cobrados asignados al lavador sin grupo (trabajo individual)."""
-        assignment = self._branch_washer.get_active_assignment_for_washer(washer_id)
+        assignment = self._assignment_for_washer(washer_id)
         if assignment is None:
             return []
 
@@ -1268,7 +1386,7 @@ class WasherPayService:
         day: date,
         force_goal_met: bool = False,
     ) -> tuple[int, int, list[WasherPayDetailLine], int]:
-        assignment = self._branch_washer.get_active_assignment_for_washer(washer_id)
+        assignment = self._assignment_for_washer(washer_id)
         if assignment is None:
             return 0, 0, [], 0
 
@@ -1451,8 +1569,16 @@ class WasherPayService:
             branch_office_id=branch_office_id,
             day=day,
         )
+        if not solo_washer_ids and not active_group_ids:
+            return WasherPaySummaryResponse(
+                branch_office_id=str(branch_office_id),
+                branch_name=branch.branch_office,
+                date=day.isoformat(),
+                items=[],
+                amount=0,
+            )
 
-        washer_ids = self._branch_washer.list_washer_ids_for_branch(branch_office_id)
+        washer_ids = self._branch_washer_ids(branch_office_id)
         status_map = self._payment_status_map(
             branch_office_id=branch_office_id,
             day=day,
@@ -1474,7 +1600,7 @@ class WasherPayService:
             )
             if ticket_count <= 0 and amount <= 0:
                 continue
-            assignment = self._branch_washer.get_active_assignment_for_washer(washer_id)
+            assignment = self._assignment_for_washer(washer_id)
             solo_goal_met = self._is_goal_met(
                 sales_volume=solo_sales_gross,
                 goal_amount=self._member_goal_amount(assignment),
@@ -1567,12 +1693,7 @@ class WasherPayService:
                     ),
                 )
                 for member_id in member_ids
-                if (
-                    assignment_row := self._branch_washer.get_active_assignment_for_washer(
-                        member_id,
-                    )
-                )
-                is not None
+                if (assignment_row := self._assignment_for_washer(member_id)) is not None
             ]
             paying_members = list(member_ids) if group_amount > 0 else []
             group_status: WasherPayPaymentStatus = (
@@ -1619,7 +1740,7 @@ class WasherPayService:
         if washer_id not in self._branch_washer.list_washer_ids_for_branch(branch_office_id):
             raise WasherPayValidationError("El lavador no pertenece a esta sucursal")
 
-        assignment = self._branch_washer.get_active_assignment_for_washer(washer_id)
+        assignment = self._assignment_for_washer(washer_id)
         is_solo_detail = group_id is None or group_id <= 0
         manual_goal_met = (
             self._get_manual_goal_met(
@@ -1758,10 +1879,7 @@ class WasherPayService:
                     ),
                 )
                 for member_id in member_ids
-                if (assignment_row := self._branch_washer.get_active_assignment_for_washer(
-                    member_id,
-                ))
-                is not None
+                if (assignment_row := self._assignment_for_washer(member_id)) is not None
             ]
             applied_raw = self._format_group_applied_percentage(member_pcts) or applied_raw
             if group_goal_met and not is_sunday:
