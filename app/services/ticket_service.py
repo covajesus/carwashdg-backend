@@ -771,7 +771,7 @@ class TicketService:
         revenue_day: date | None = None,
     ) -> list[TicketListItem]:
         scope = self._branch_scope_for_user(user)
-        effective_day = business_today() if scope is not None else revenue_day
+        effective_day = business_today() if user.role == "supervisor" else revenue_day
 
         stmt = self._list_stmt_for_user(user).options(defer(Ticket.photo_url))
         if effective_day is not None:
@@ -1364,7 +1364,7 @@ class TicketService:
                     raise TicketValidationError(str(exc)) from exc
             if "status_id" in patch:
                 row.status_id = patch["status_id"]
-        elif user.role == "manager":
+        elif user.role in {"manager", "supervisor"}:
             payment_patch_keys = {
                 "payment_type_id",
                 "payment_efectivo_amount",

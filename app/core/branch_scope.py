@@ -9,7 +9,7 @@ def branch_scope_for_user(user: UserPublic) -> int | None:
     """
     if user.role == "admin":
         return None
-    if user.role == "manager":
+    if user.role in {"manager", "supervisor"}:
         bid = user.branchOfficeId
         return bid if bid is not None and bid >= 1 else 0
     return 0

@@ -7,7 +7,12 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.roles import MANAGER_ROL_ID, WASHER_ROL_ID, role_from_id, role_id_from_role
+from app.core.roles import (
+    BRANCH_MANAGER_ROL_IDS,
+    WASHER_ROL_ID,
+    role_from_id,
+    role_id_from_role,
+)
 from app.core.security import hash_password, verify_password
 from app.core.user_status import (
     STATUS_ABIERTO_ID,
@@ -78,7 +83,7 @@ class UserService:
                     sunday_percentage = assignment.sunday_percentage
                     daily_goal = assignment.daily_goal
                     daily_goal_percentage = assignment.daily_goal_percentage
-            elif row.rol_id == MANAGER_ROL_ID:
+            elif row.rol_id in BRANCH_MANAGER_ROL_IDS:
                 office_id = self._branch_manager.get_branch_office_id_for_manager(row.id)
                 if office_id is not None:
                     branch_office_id = office_id
@@ -279,10 +284,12 @@ class UserService:
                     daily_goal_percentage=data.dailyGoalPercentage,
                     commit=False,
                 )
-            elif rol_id == MANAGER_ROL_ID:
+            elif rol_id in BRANCH_MANAGER_ROL_IDS:
                 branch_office_id = self._parse_branch_office_id(data.branchOfficeId)
                 if branch_office_id is None:
-                    raise UserValidationError("Seleccione una sucursal para el gerente")
+                    raise UserValidationError(
+                        "Seleccione una sucursal para el encargado o supervisor",
+                    )
                 self._branch_manager.assign_manager_to_branch(
                     row.id,
                     branch_office_id,
@@ -364,7 +371,7 @@ class UserService:
                     daily_goal_percentage=data.dailyGoalPercentage,
                     commit=False,
                 )
-            elif new_rol_id == MANAGER_ROL_ID and data.branchOfficeId is not None:
+            elif new_rol_id in BRANCH_MANAGER_ROL_IDS and data.branchOfficeId is not None:
                 branch_office_id = self._parse_branch_office_id(data.branchOfficeId)
                 if branch_office_id is not None:
                     self._branch_washer.soft_delete_for_washer(user_id, commit=False)
@@ -376,7 +383,7 @@ class UserService:
             elif data.role is not None:
                 if new_rol_id != WASHER_ROL_ID:
                     self._branch_washer.soft_delete_for_washer(user_id, commit=False)
-                if new_rol_id != MANAGER_ROL_ID:
+                if new_rol_id not in BRANCH_MANAGER_ROL_IDS:
                     self._branch_manager.soft_delete_for_manager(user_id, commit=False)
 
             row.updated_date = self._now()

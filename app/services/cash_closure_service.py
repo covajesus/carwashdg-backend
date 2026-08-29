@@ -32,7 +32,7 @@ class CashClosureService:
 
     @staticmethod
     def _require_manager(user: UserPublic) -> int:
-        if user.role != "manager":
+        if user.role not in {"manager", "supervisor"}:
             raise CashClosureValidationError("Solo encargados pueden cerrar caja")
         try:
             manager_id = int(user.id)
