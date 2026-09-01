@@ -1073,7 +1073,7 @@ class WasherPayService:
                 continue
             if not self._tickets.ticket_eligible_for_washer_pay(ticket):
                 continue
-            revenue_day = self._tickets.ticket_revenue_day(ticket)
+            revenue_day = self._tickets.ticket_washer_pay_day(ticket)
             if revenue_day is None or revenue_day < start_day or revenue_day > end_day:
                 continue
             candidates.append((ticket, revenue_day))

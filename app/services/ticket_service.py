@@ -180,13 +180,21 @@ class TicketService:
         return self._status_label_is_open(status_text)
 
     def ticket_revenue_day(self, row: Ticket) -> date | None:
-        """Business day for earnings and washer pay (checkout/payment day when collected)."""
+        """Business day for earnings and collection (checkout/payment day when collected)."""
         if row.payment_type_id in PAID_PAYMENT_TYPE_IDS:
             if row.updated_date is not None:
                 return business_local_date(row.updated_date)
         if self.ticket_is_collected(row) and row.updated_date is not None:
             return business_local_date(row.updated_date)
         return business_local_date(row.added_date)
+
+    def ticket_washer_pay_day(self, row: Ticket) -> date | None:
+        """Business day for washer commission (service day, not late checkout)."""
+        if row.added_date is not None:
+            return business_local_date(row.added_date)
+        if row.updated_date is not None:
+            return business_local_date(row.updated_date)
+        return None
 
     def ticket_eligible_for_washer_pay(self, row: Ticket) -> bool:
         """Washer commission applies to collected/paid tickets only."""

@@ -343,7 +343,7 @@ class WasherDailyGroupService:
             ticket = tickets_by_id.get(line.ticket_id)
             if ticket is None:
                 continue
-            if ticket_svc.ticket_revenue_day(ticket) == day:
+            if ticket_svc.ticket_washer_pay_day(ticket) == day:
                 found.add(line.washer_id)
         return sorted(
             found,
