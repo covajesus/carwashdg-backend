@@ -10,6 +10,7 @@ from app.api.v1.endpoints import (
     configurations,
     customers,
     expenses,
+    expense_types,
     collections,
     health,
     raffles,
@@ -42,6 +43,7 @@ api_router.include_router(configurations.router)
 api_router.include_router(customers.router)
 api_router.include_router(cash_closure.router)
 api_router.include_router(expenses.router)
+api_router.include_router(expense_types.router)
 api_router.include_router(collections.router)
 api_router.include_router(reports.router)
 api_router.include_router(services.router)

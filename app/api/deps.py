@@ -16,6 +16,7 @@ from app.services.catalog_service import CatalogService
 from app.services.configuration_service import ConfigurationService
 from app.services.customer_service import CustomerService
 from app.services.expense_service import ExpenseService
+from app.services.expense_type_service import ExpenseTypeService
 from app.services.dashboard_service import DashboardService
 from app.services.eerr_service import EerrService
 from app.services.comparison_service import ComparisonService
@@ -97,6 +98,10 @@ def get_expense_service(db: DbSession) -> ExpenseService:
     return ExpenseService(db)
 
 
+def get_expense_type_service(db: DbSession) -> ExpenseTypeService:
+    return ExpenseTypeService(db)
+
+
 def get_eerr_service(db: DbSession) -> EerrService:
     return EerrService(db)
 
@@ -174,6 +179,7 @@ WasherDailyGroupServiceDep = Annotated[
     Depends(get_washer_daily_group_service),
 ]
 ExpenseServiceDep = Annotated[ExpenseService, Depends(get_expense_service)]
+ExpenseTypeServiceDep = Annotated[ExpenseTypeService, Depends(get_expense_type_service)]
 CollectionServiceDep = Annotated[CollectionService, Depends(get_collection_service)]
 EerrServiceDep = Annotated[EerrService, Depends(get_eerr_service)]
 ComparisonServiceDep = Annotated[ComparisonService, Depends(get_comparison_service)]

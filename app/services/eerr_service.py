@@ -18,7 +18,8 @@ from app.services.collection_service import (
     apply_manual_breakdown_to_bucket,
     empty_earnings_bucket,
 )
-from app.services.expense_service import ADMIN_ONLY_EXPENSE_TYPES, EXPENSE_TYPE_LABELS, ExpenseService
+from app.services.expense_service import ExpenseService
+from app.services.expense_type_service import ExpenseTypeService
 from app.services.ticket_service import TicketService, TicketValidationError
 from app.services.washer_pay_service import WasherPayService, WasherPayValidationError
 
@@ -72,6 +73,7 @@ class EerrService:
         self._collections = CollectionService(db)
         self._washer_pay = WasherPayService(db)
         self._expenses = ExpenseService(db)
+        self._expense_types = ExpenseTypeService(db)
 
     @staticmethod
     def _require_admin(user: UserPublic) -> None:
@@ -282,7 +284,14 @@ class EerrService:
             date_key = _expense_date_key(row.expense_date, row.added_date)
             if date_key is None or not date_key.startswith(month_prefix):
                 continue
-            by_type[row.expense_type.strip()].append(row)
+            type_key = (row.expense_type or "").strip() or (
+                str(row.expenseTypeId) if row.expenseTypeId is not None else "otros"
+            )
+            by_type[type_key].append(row)
+
+        type_catalog = {
+            (item.code or "").strip(): item for item in self._expense_types.list_all() if item.code
+        }
 
         accounts: list[EerrAccountLine] = []
         expenses_operational_total = 0
@@ -298,12 +307,20 @@ class EerrService:
             ),
         )
 
-        for type_id, label in EXPENSE_TYPE_LABELS.items():
-            rows = by_type.get(type_id, [])
+        for type_code, rows in sorted(
+            by_type.items(),
+            key=lambda pair: (
+                (type_catalog.get(pair[0]).name if type_catalog.get(pair[0]) else pair[0]).lower(),
+                pair[0],
+            ),
+        ):
             amount = sum(int(r.amount or 0) for r in rows)
             if amount <= 0:
                 continue
-            if type_id in ADMIN_ONLY_EXPENSE_TYPES:
+            catalog_item = type_catalog.get(type_code)
+            label = catalog_item.name if catalog_item is not None else type_code
+            admin_only = bool(catalog_item.adminOnly) if catalog_item is not None else False
+            if admin_only:
                 arriendo_total += amount
             else:
                 expenses_operational_total += amount
@@ -315,7 +332,7 @@ class EerrService:
                 by_day[day_key] += int(r.amount or 0)
             items = [
                 EerrDetailItem(
-                    id=f"{type_id}:{day_key}",
+                    id=f"{type_code}:{day_key}",
                     date=day_key,
                     description=label,
                     amount=day_amount,
@@ -324,7 +341,7 @@ class EerrService:
             ]
             accounts.append(
                 EerrAccountLine(
-                    id=type_id,
+                    id=type_code,
                     kind="expense",
                     label=label,
                     amount=amount,

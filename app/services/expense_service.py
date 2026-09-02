@@ -8,23 +8,11 @@ from app.core.branch_scope import branch_scope_for_user
 from app.core.datetime_utils import business_now
 from app.models.branch_office import BranchOffice
 from app.models.expense import Expense
+from app.models.expense_type import ExpenseType
 from app.schemas.expense import ExpenseCreate, ExpensePublic, ExpenseUpdate
 from app.schemas.user import UserPublic
+from app.services.expense_type_service import ExpenseTypeService
 
-EXPENSE_TYPE_LABELS: dict[str, str] = {
-    "insumos": "Insumos y químicos",
-    "servicios_basicos": "Servicios básicos (luz, agua, gas)",
-    "mantenimiento": "Mantenimiento y equipos",
-    "nomina": "Nómina y sueldos",
-    "arriendo": "Arriendo",
-    "marketing": "Marketing y publicidad",
-    "transporte": "Transporte y combustible",
-    "prestamo": "Préstamo",
-    "otros": "Otros",
-}
-
-# Solo administradores pueden ver, crear o editar estos tipos.
-ADMIN_ONLY_EXPENSE_TYPES = frozenset({"arriendo"})
 
 class ExpenseNotFoundError(Exception):
     pass
@@ -41,40 +29,59 @@ class ExpenseForbiddenError(Exception):
 class ExpenseService:
     def __init__(self, db: Session) -> None:
         self.db = db
+        self._types = ExpenseTypeService(db)
 
     @staticmethod
     def _now() -> datetime:
         return business_now()
 
     @staticmethod
-    def type_label(expense_type: str) -> str:
-        key = expense_type.strip()
-        return EXPENSE_TYPE_LABELS.get(key, key or "—")
-
-    @staticmethod
-    def list_type_options() -> list[dict[str, str]]:
-        return [{"id": key, "label": label} for key, label in EXPENSE_TYPE_LABELS.items()]
-
-    @staticmethod
     def _user_is_admin(user: UserPublic) -> bool:
         return branch_scope_for_user(user) is None
 
-    def list_type_options_for_user(self, user: UserPublic) -> list[dict[str, str]]:
-        options = self.list_type_options()
-        if self._user_is_admin(user):
-            return options
-        return [row for row in options if row["id"] not in ADMIN_ONLY_EXPENSE_TYPES]
+    def list_type_options_for_user(self, user: UserPublic) -> list[dict[str, object]]:
+        items = self._types.list_options_for_user(is_admin=self._user_is_admin(user))
+        return [
+            {
+                "id": row.id,
+                "label": row.name,
+                "classification": row.classification,
+                "classificationLabel": row.classificationLabel,
+                "requiresPhoto": row.requiresPhoto,
+                "adminOnly": row.adminOnly,
+            }
+            for row in items
+        ]
+
+    def _resolve_type_row(self, expense_type_id: int | None) -> ExpenseType:
+        if expense_type_id is None or expense_type_id < 1:
+            raise ExpenseValidationError("Seleccione el tipo de gasto")
+        try:
+            return self._types.get_active_row(expense_type_id)
+        except Exception as exc:
+            raise ExpenseValidationError("Tipo de gasto no válido") from exc
+
+    def _type_row_for_expense(self, row: Expense) -> ExpenseType | None:
+        if row.expense_type_id is not None and row.expense_type_id >= 1:
+            try:
+                return self._types.get_active_row(int(row.expense_type_id))
+            except Exception:
+                pass
+        if row.expense_type:
+            return self._types.get_active_row_by_code(row.expense_type)
+        return None
 
     def _assert_expense_visible_to_user(self, user: UserPublic, row: Expense) -> None:
         if self._user_is_admin(user):
             return
-        if row.expense_type.strip() in ADMIN_ONLY_EXPENSE_TYPES:
+        type_row = self._type_row_for_expense(row)
+        if type_row is not None and bool(type_row.admin_only):
             raise ExpenseNotFoundError()
 
-    def _reject_admin_only_type_for_user(self, user: UserPublic, expense_type: str) -> None:
+    def _reject_admin_only_type_for_user(self, user: UserPublic, type_row: ExpenseType) -> None:
         if self._user_is_admin(user):
             return
-        if expense_type in ADMIN_ONLY_EXPENSE_TYPES:
+        if bool(type_row.admin_only):
             raise ExpenseValidationError("Tipo de gasto no válido")
 
     def _branch_name(self, branch_office_id: int | None) -> str | None:
@@ -86,15 +93,31 @@ class ExpenseService:
         return branch.branch_office.strip() or None
 
     def to_public(self, row: Expense) -> ExpensePublic:
-        branch_id = row.branch_office_id
+        type_row = self._type_row_for_expense(row)
+        classification = None
+        classification_label = None
+        type_id = row.expense_type_id
+        type_code = (row.expense_type or "").strip()
+        type_label = type_code or "—"
+        if type_row is not None:
+            type_id = int(type_row.id) if type_row.id is not None else type_id
+            type_code = (type_row.code or "").strip() or type_code
+            type_label = (type_row.name or "").strip() or type_label
+            classification = (
+                "cash" if (type_row.classification or "").strip().lower() == "cash" else "bank"
+            )
+            classification_label = self._types.classification_label(classification)
         return ExpensePublic(
             id=str(row.id),
-            expense_type=row.expense_type,
-            expense_type_label=self.type_label(row.expense_type),
+            expenseTypeId=type_id,
+            expense_type=type_code,
+            expense_type_label=type_label,
+            classification=classification,
+            classificationLabel=classification_label,
             amount=int(row.amount or 0),
             expense_date=row.expense_date,
-            branchOfficeId=branch_id,
-            branchOfficeName=self._branch_name(branch_id),
+            branchOfficeId=row.branch_office_id,
+            branchOfficeName=self._branch_name(row.branch_office_id),
             photo_url=row.photo_url,
             added_date=row.added_date,
             updated_date=row.updated_date,
@@ -103,15 +126,6 @@ class ExpenseService:
 
     def _active_filter(self, stmt):
         return stmt.where(Expense.deleted_date.is_(None))
-
-    @staticmethod
-    def _normalize_type(value: str) -> str:
-        key = value.strip()
-        if not key:
-            raise ExpenseValidationError("Seleccione el tipo de gasto")
-        if key not in EXPENSE_TYPE_LABELS:
-            raise ExpenseValidationError("Tipo de gasto no válido")
-        return key
 
     @staticmethod
     def _normalize_photo(value: str | None) -> str | None:
@@ -162,6 +176,15 @@ class ExpenseService:
         if scope == 0 or row.branch_office_id != scope:
             raise ExpenseNotFoundError()
 
+    def _admin_only_type_ids(self) -> list[int]:
+        rows = self.db.scalars(
+            select(ExpenseType.id).where(
+                ExpenseType.deleted_date.is_(None),
+                ExpenseType.admin_only.is_(True),
+            ),
+        ).all()
+        return [int(row) for row in rows if row is not None]
+
     def month_total_for_user(self, user: UserPublic, *, year: int, month: int) -> int:
         if month < 1 or month > 12:
             raise ExpenseValidationError("Mes no válido")
@@ -183,7 +206,12 @@ class ExpenseService:
         if scope is not None:
             stmt = stmt.where(Expense.branch_office_id == scope)
         if not self._user_is_admin(user):
-            stmt = stmt.where(Expense.expense_type.notin_(tuple(ADMIN_ONLY_EXPENSE_TYPES)))
+            admin_only_ids = self._admin_only_type_ids()
+            if admin_only_ids:
+                stmt = stmt.where(
+                    (Expense.expense_type_id.is_(None))
+                    | (Expense.expense_type_id.notin_(tuple(admin_only_ids))),
+                )
 
         return int(self.db.scalar(stmt) or 0)
 
@@ -213,7 +241,13 @@ class ExpenseService:
 
         rows = list(self.db.scalars(stmt).all())
         if not self._user_is_admin(user):
-            rows = [row for row in rows if row.expense_type.strip() not in ADMIN_ONLY_EXPENSE_TYPES]
+            visible: list[Expense] = []
+            for row in rows:
+                type_row = self._type_row_for_expense(row)
+                if type_row is not None and bool(type_row.admin_only):
+                    continue
+                visible.append(row)
+            rows = visible
         return [self.to_public(row) for row in rows]
 
     def get_by_id_for_user(self, user: UserPublic, expense_id: int) -> ExpensePublic:
@@ -227,13 +261,16 @@ class ExpenseService:
         return self.to_public(row)
 
     def create(self, user: UserPublic, data: ExpenseCreate) -> ExpensePublic:
-        expense_type = self._normalize_type(data.expense_type)
-        self._reject_admin_only_type_for_user(user, expense_type)
+        type_row = self._resolve_type_row(data.expenseTypeId)
+        self._reject_admin_only_type_for_user(user, type_row)
         photo_url = self._normalize_photo(data.photo_url)
+        if bool(type_row.requires_photo) and not photo_url:
+            raise ExpenseValidationError("Suba una foto del comprobante")
         branch_office_id = self._resolve_branch_for_create(user, data.branchOfficeId)
         now = self._now()
         row = Expense(
-            expense_type=expense_type,
+            expense_type=(type_row.code or "").strip(),
+            expense_type_id=int(type_row.id),
             amount=int(data.amount),
             expense_date=data.expense_date,
             branch_office_id=branch_office_id,
@@ -254,10 +291,13 @@ class ExpenseService:
         self._assert_can_access(user, row)
         self._assert_expense_visible_to_user(user, row)
 
-        if data.expense_type is not None:
-            expense_type = self._normalize_type(data.expense_type)
-            self._reject_admin_only_type_for_user(user, expense_type)
-            row.expense_type = expense_type
+        type_row = self._type_row_for_expense(row)
+        if data.expenseTypeId is not None:
+            type_row = self._resolve_type_row(data.expenseTypeId)
+            self._reject_admin_only_type_for_user(user, type_row)
+            row.expense_type_id = int(type_row.id)
+            row.expense_type = (type_row.code or "").strip()
+
         if data.amount is not None:
             if data.amount < 1:
                 raise ExpenseValidationError("Indique un monto mayor a cero")

@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class ExpenseCreate(BaseModel):
-    expense_type: str = Field(..., min_length=1, max_length=64)
+    expenseTypeId: int = Field(..., ge=1)
     amount: int = Field(..., ge=1)
     expense_date: date
     photo_url: str | None = None
@@ -12,7 +12,7 @@ class ExpenseCreate(BaseModel):
 
 
 class ExpenseUpdate(BaseModel):
-    expense_type: str | None = Field(default=None, min_length=1, max_length=64)
+    expenseTypeId: int | None = Field(default=None, ge=1)
     amount: int | None = Field(default=None, ge=1)
     expense_date: date | None = None
     photo_url: str | None = None
@@ -21,8 +21,11 @@ class ExpenseUpdate(BaseModel):
 
 class ExpensePublic(BaseModel):
     id: str
+    expenseTypeId: int | None = Field(default=None, ge=1)
     expense_type: str
     expense_type_label: str
+    classification: str | None = None
+    classificationLabel: str | None = None
     amount: int = Field(ge=0)
     expense_date: date | None = None
     branchOfficeId: int | None = Field(default=None, ge=1)
@@ -48,6 +51,10 @@ class ExpenseDeleteResponse(BaseModel):
 class ExpenseTypeOption(BaseModel):
     id: str
     label: str
+    classification: str
+    classificationLabel: str
+    requiresPhoto: bool = True
+    adminOnly: bool = False
 
 
 class ExpenseTypesResponse(BaseModel):
