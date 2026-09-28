@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, status
 
 from app.api.deps import BranchOfficeServiceDep
 from app.schemas.branch_office import (
+    BranchLocationListResponse,
     BranchOfficeCreate,
     BranchOfficeDeleteResponse,
     BranchOfficeItemResponse,
@@ -24,6 +25,11 @@ router = APIRouter(prefix="/branches", tags=["branch_offices"])
 )
 def list_branches(service: BranchOfficeServiceDep) -> BranchOfficeListResponse:
     return BranchOfficeListResponse(items=service.list_all())
+
+
+@router.get("/locations", response_model=BranchLocationListResponse)
+def list_branch_locations(service: BranchOfficeServiceDep) -> BranchLocationListResponse:
+    return BranchLocationListResponse(items=service.list_public_locations())
 
 
 @router.post(

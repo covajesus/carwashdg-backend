@@ -1,4 +1,6 @@
 from app.schemas.branch_office import (
+    BranchLocationListResponse,
+    BranchLocationPublic,
     BranchOfficeCreate,
     BranchOfficeItemResponse,
     BranchOfficeListResponse,
@@ -32,6 +34,8 @@ from app.schemas.status import (
 )
 
 __all__ = [
+    "BranchLocationListResponse",
+    "BranchLocationPublic",
     "BranchOfficeCreate",
     "BranchOfficeItemResponse",
     "BranchOfficeListResponse",

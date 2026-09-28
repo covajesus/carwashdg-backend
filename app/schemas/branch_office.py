@@ -48,6 +48,15 @@ class BranchOfficeListResponse(BaseModel):
     items: list[BranchOfficePublic]
 
 
+class BranchLocationPublic(BaseModel):
+    id: str
+    name: str
+
+
+class BranchLocationListResponse(BaseModel):
+    items: list[BranchLocationPublic]
+
+
 class BranchOfficeItemResponse(BaseModel):
     item: BranchOfficePublic
 

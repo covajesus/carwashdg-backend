@@ -6,7 +6,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.branch_office import BranchOffice
-from app.schemas.branch_office import BranchOfficeCreate, BranchOfficePublic, BranchOfficeUpdate
+from app.schemas.branch_office import (
+    BranchLocationPublic,
+    BranchOfficeCreate,
+    BranchOfficePublic,
+    BranchOfficeUpdate,
+)
 
 
 class BranchOfficeNotFoundError(Exception):
@@ -52,6 +57,18 @@ class BranchOfficeService:
         stmt = select(BranchOffice).order_by(BranchOffice.id)
         rows = self.db.scalars(stmt).all()
         return [self.to_public(row) for row in rows]
+
+    def list_public_locations(self) -> list[BranchLocationPublic]:
+        stmt = (
+            select(BranchOffice)
+            .where(BranchOffice.deleted_date.is_(None))
+            .order_by(BranchOffice.branch_office)
+        )
+        return [
+            BranchLocationPublic(id=str(row.id), name=row.branch_office.strip())
+            for row in self.db.scalars(stmt).all()
+            if row.branch_office.strip()
+        ]
 
     def get_by_id(self, branch_id: int) -> BranchOfficePublic:
         row = self.db.get(BranchOffice, branch_id)
