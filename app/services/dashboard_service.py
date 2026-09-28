@@ -47,6 +47,11 @@ class DashboardService:
     def _month_revenue_subtotal(self, user: UserPublic, *, year: int, month: int) -> int:
         today = business_today()
         last_day = calendar.monthrange(year, month)[1]
+        range_start = date(year, month, 1)
+        range_end = min(date(year, month, last_day), today)
+        if range_end < range_start:
+            return 0
+
         month_prefix = f"{year}-{month:02d}"
         total = 0
 
@@ -56,20 +61,24 @@ class DashboardService:
             mgmt = int(branch.management_type_id or 1)
 
             if mgmt == 1:
-                for day_num in range(1, last_day + 1):
-                    day = date(year, month, day_num)
-                    if day > today:
+                try:
+                    buckets = self._tickets.ticket_earnings_date_buckets(
+                        user,
+                        branch_id,
+                        revenue_range=(range_start, range_end),
+                    )
+                except TicketValidationError:
+                    continue
+                for day_key, totals in buckets.items():
+                    if not day_key.startswith(month_prefix):
                         continue
                     try:
-                        buckets = self._tickets.ticket_earnings_date_buckets(
-                            user,
-                            branch_id,
-                            revenue_day=day,
-                        )
-                    except TicketValidationError:
+                        day = date.fromisoformat(day_key[:10])
+                    except ValueError:
                         continue
-                    for totals in buckets.values():
-                        total += totals["subtotal"]
+                    if day > today:
+                        continue
+                    total += totals["subtotal"]
                 continue
 
             if mgmt == 2:
