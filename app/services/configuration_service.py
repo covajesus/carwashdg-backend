@@ -52,6 +52,7 @@ class ConfigurationService:
             twitter_url=row.twitter_url,
             tiktok_url=row.tiktok_url,
             instagram_url=row.instagram_url,
+            raffle_status_id=1 if int(getattr(row, "raffle_status_id", 1) or 0) == 1 else 0,
             updated_date=updated_date,
         )
 
@@ -67,6 +68,7 @@ class ConfigurationService:
             tiktok_url=row.tiktok_url,
             instagram_url=row.instagram_url,
             coin_round_status_id=int(row.coin_round_status_id or 0),
+            raffle_status_id=1 if int(getattr(row, "raffle_status_id", 1) or 0) == 1 else 0,
         )
 
     def _get_or_create_row(self) -> Configuration:
@@ -88,6 +90,7 @@ class ConfigurationService:
             twitter_url="",
             instagram_url="",
             coin_round_status_id=0,
+            raffle_status_id=1,
         )
         self.db.add(row)
         self.db.commit()
@@ -109,6 +112,10 @@ class ConfigurationService:
         if "coin_round_status_id" in patch:
             value = patch["coin_round_status_id"]
             row.coin_round_status_id = 1 if int(value or 0) == 1 else 0
+
+        if "raffle_status_id" in patch:
+            value = patch["raffle_status_id"]
+            row.raffle_status_id = 1 if int(value or 0) == 1 else 0
 
         if "email" in patch:
             email = (patch["email"] or "").strip()

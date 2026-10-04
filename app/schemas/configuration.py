@@ -12,6 +12,7 @@ class ConfigurationUpdate(BaseModel):
     tiktok_url: str | None = Field(default=None, max_length=255)
     instagram_url: str | None = Field(default=None, max_length=255)
     coin_round_status_id: int | None = Field(default=None, ge=0, le=1)
+    raffle_status_id: int | None = Field(default=None, ge=0, le=1)
 
 
 class ConfigurationRead(BaseModel):
@@ -26,6 +27,7 @@ class ConfigurationRead(BaseModel):
     tiktok_url: str
     instagram_url: str
     coin_round_status_id: int = Field(ge=0, le=1)
+    raffle_status_id: int = Field(default=1, ge=0, le=1)
 
 
 class ConfigurationPublic(BaseModel):
@@ -36,6 +38,7 @@ class ConfigurationPublic(BaseModel):
     twitter_url: str
     tiktok_url: str
     instagram_url: str
+    raffle_status_id: int = Field(default=1, ge=0, le=1)
     updated_date: datetime | None = None
 
 

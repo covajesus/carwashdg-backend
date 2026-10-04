@@ -16,3 +16,4 @@ class Configuration(Base):
     twitter_url: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     instagram_url: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     coin_round_status_id: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    raffle_status_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
