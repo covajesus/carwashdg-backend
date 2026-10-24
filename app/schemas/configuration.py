@@ -13,6 +13,10 @@ class ConfigurationUpdate(BaseModel):
     instagram_url: str | None = Field(default=None, max_length=255)
     coin_round_status_id: int | None = Field(default=None, ge=0, le=1)
     raffle_status_id: int | None = Field(default=None, ge=0, le=1)
+    benefit_ecological_image: str | None = Field(default=None, max_length=2048)
+    benefit_fast_image: str | None = Field(default=None, max_length=2048)
+    benefit_professional_image: str | None = Field(default=None, max_length=2048)
+    benefit_premium_image: str | None = Field(default=None, max_length=2048)
 
 
 class ConfigurationRead(BaseModel):
@@ -28,6 +32,10 @@ class ConfigurationRead(BaseModel):
     instagram_url: str
     coin_round_status_id: int = Field(ge=0, le=1)
     raffle_status_id: int = Field(default=1, ge=0, le=1)
+    benefit_ecological_image: str = ""
+    benefit_fast_image: str = ""
+    benefit_professional_image: str = ""
+    benefit_premium_image: str = ""
 
 
 class ConfigurationPublic(BaseModel):
@@ -39,6 +47,10 @@ class ConfigurationPublic(BaseModel):
     tiktok_url: str
     instagram_url: str
     raffle_status_id: int = Field(default=1, ge=0, le=1)
+    benefit_ecological_image: str = ""
+    benefit_fast_image: str = ""
+    benefit_professional_image: str = ""
+    benefit_premium_image: str = ""
     updated_date: datetime | None = None
 
 
