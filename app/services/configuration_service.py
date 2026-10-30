@@ -78,13 +78,22 @@ class ConfigurationService:
             tiktok_url=row.tiktok_url,
             instagram_url=row.instagram_url,
             raffle_status_id=1 if int(getattr(row, "raffle_status_id", 1) or 0) == 1 else 0,
-            benefit_ecological_image=self._published_benefit_image(row.benefit_ecological_image, "ecological"),
-            benefit_fast_image=self._published_benefit_image(row.benefit_fast_image, "fast"),
-            benefit_professional_image=self._published_benefit_image(
+            benefit_ecological_image=ConfigurationService._published_benefit_image(
+                row.benefit_ecological_image,
+                "ecological",
+            ),
+            benefit_fast_image=ConfigurationService._published_benefit_image(
+                row.benefit_fast_image,
+                "fast",
+            ),
+            benefit_professional_image=ConfigurationService._published_benefit_image(
                 row.benefit_professional_image,
                 "professional",
             ),
-            benefit_premium_image=self._published_benefit_image(row.benefit_premium_image, "premium"),
+            benefit_premium_image=ConfigurationService._published_benefit_image(
+                row.benefit_premium_image,
+                "premium",
+            ),
             updated_date=updated_date,
         )
 
@@ -101,13 +110,22 @@ class ConfigurationService:
             instagram_url=row.instagram_url,
             coin_round_status_id=int(row.coin_round_status_id or 0),
             raffle_status_id=1 if int(getattr(row, "raffle_status_id", 1) or 0) == 1 else 0,
-            benefit_ecological_image=self._published_benefit_image(row.benefit_ecological_image, "ecological"),
-            benefit_fast_image=self._published_benefit_image(row.benefit_fast_image, "fast"),
-            benefit_professional_image=self._published_benefit_image(
+            benefit_ecological_image=ConfigurationService._published_benefit_image(
+                row.benefit_ecological_image,
+                "ecological",
+            ),
+            benefit_fast_image=ConfigurationService._published_benefit_image(
+                row.benefit_fast_image,
+                "fast",
+            ),
+            benefit_professional_image=ConfigurationService._published_benefit_image(
                 row.benefit_professional_image,
                 "professional",
             ),
-            benefit_premium_image=self._published_benefit_image(row.benefit_premium_image, "premium"),
+            benefit_premium_image=ConfigurationService._published_benefit_image(
+                row.benefit_premium_image,
+                "premium",
+            ),
         )
 
     def _get_or_create_row(self) -> Configuration:
