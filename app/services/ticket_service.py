@@ -180,13 +180,15 @@ class TicketService:
         return self._status_label_is_open(status_text)
 
     def ticket_revenue_day(self, row: Ticket) -> date | None:
-        """Business day for earnings and collection (checkout/payment day when collected)."""
-        if row.payment_type_id in PAID_PAYMENT_TYPE_IDS:
-            if row.updated_date is not None:
-                return business_local_date(row.updated_date)
-        if self.ticket_is_collected(row) and row.updated_date is not None:
+        """Business day for list, earnings and collection: day the ticket was opened.
+
+        Closing or paying later must not move the ticket to the checkout day.
+        """
+        if row.added_date is not None:
+            return business_local_date(row.added_date)
+        if row.updated_date is not None:
             return business_local_date(row.updated_date)
-        return business_local_date(row.added_date)
+        return None
 
     def ticket_washer_pay_day(self, row: Ticket) -> date | None:
         """Business day for washer commission (service day, not late checkout)."""
@@ -283,27 +285,18 @@ class TicketService:
             day_start = datetime.combine(revenue_day, time.min)
             day_end = datetime.combine(revenue_day, time(23, 59, 59, 999999))
             stmt = stmt.where(
-                Ticket.updated_date.isnot(None),
-                Ticket.updated_date >= day_start,
-                Ticket.updated_date <= day_end,
+                Ticket.added_date.isnot(None),
+                Ticket.added_date >= day_start,
+                Ticket.added_date <= day_end,
             )
         elif revenue_range is not None:
             range_start, range_end = revenue_range
             window_start = datetime.combine(range_start, time.min)
             window_end = datetime.combine(range_end, time(23, 59, 59, 999999))
             stmt = stmt.where(
-                or_(
-                    and_(
-                        Ticket.updated_date.isnot(None),
-                        Ticket.updated_date >= window_start,
-                        Ticket.updated_date <= window_end,
-                    ),
-                    and_(
-                        Ticket.added_date.isnot(None),
-                        Ticket.added_date >= window_start,
-                        Ticket.added_date <= window_end,
-                    ),
-                ),
+                Ticket.added_date.isnot(None),
+                Ticket.added_date >= window_start,
+                Ticket.added_date <= window_end,
             )
 
         rows = list(self.db.scalars(stmt).all())
@@ -539,25 +532,17 @@ class TicketService:
         return False
 
     def _apply_revenue_day_filter(self, stmt, revenue_day: date):
-        """SQL prefilter: tickets whose added or updated timestamp falls on the day.
+        """SQL prefilter: tickets opened on the selected business day.
 
-        Final matching uses ticket_revenue_day() in Python so collected-by-label
-        tickets and paid rows without updated_date stay aligned with earnings.
+        Final matching uses ticket_revenue_day() in Python. Paying later must not
+        move a ticket onto the checkout day.
         """
         day_start = datetime.combine(revenue_day, time.min)
         day_end = datetime.combine(revenue_day, time(23, 59, 59, 999999))
         return stmt.where(
-            or_(
-                and_(
-                    Ticket.added_date >= day_start,
-                    Ticket.added_date <= day_end,
-                ),
-                and_(
-                    Ticket.updated_date.isnot(None),
-                    Ticket.updated_date >= day_start,
-                    Ticket.updated_date <= day_end,
-                ),
-            ),
+            Ticket.added_date.isnot(None),
+            Ticket.added_date >= day_start,
+            Ticket.added_date <= day_end,
         )
 
     def _branch_ids_for_ticket_ids(self, ticket_ids: list[int]) -> dict[int, int]:

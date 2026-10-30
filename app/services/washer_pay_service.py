@@ -8,7 +8,7 @@ from datetime import date, datetime, time, timedelta
 from app.core.datetime_utils import business_now, business_today
 from decimal import Decimal
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.pricing import (
@@ -1049,18 +1049,9 @@ class WasherPayService:
             .where(
                 Ticket.deleted_date.is_(None),
                 Ticket.id.in_(branch_ticket_ids),
-                or_(
-                    and_(
-                        Ticket.updated_date.isnot(None),
-                        Ticket.updated_date >= window_start,
-                        Ticket.updated_date <= window_end,
-                    ),
-                    and_(
-                        Ticket.added_date.isnot(None),
-                        Ticket.added_date >= window_start,
-                        Ticket.added_date <= window_end,
-                    ),
-                ),
+                Ticket.added_date.isnot(None),
+                Ticket.added_date >= window_start,
+                Ticket.added_date <= window_end,
             )
             .order_by(Ticket.id.asc()),
         ).all()
